@@ -188,6 +188,8 @@ public:
 	uint32_t statisticsReadBackIndex = 0;
 	uint32_t layerMask = ~0u;
 
+	inline float GetEmit() const { return emit; }
+
 	inline bool IsDebug() const { return _flags & FLAG_DEBUG; }
 	inline bool IsPaused() const { return _flags & FLAG_PAUSED; }
 	inline bool IsEmitPaused() const { return _flags & FLAG_EMIT_PAUSE; }

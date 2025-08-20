@@ -71,7 +71,7 @@ void RenderPath3D_PathTracing::ResizeBuffers()
 		device->CreateTexture(&desc, nullptr, &rtPostprocess_LDR[0]);
 		device->SetName(&rtPostprocess_LDR[0], "rtPostprocess_LDR[0]");
 
-
+#ifndef GGREDUCED
 		desc.Width /= 4;
 		desc.Height /= 4;
 		desc.BindFlags = BIND_UNORDERED_ACCESS | BIND_SHADER_RESOURCE;
@@ -84,6 +84,7 @@ void RenderPath3D_PathTracing::ResizeBuffers()
 		device->SetName(&rtGUIBlurredBackground[1], "rtGUIBlurredBackground[1]");
 		device->CreateTexture(&desc, nullptr, &rtGUIBlurredBackground[2]);
 		device->SetName(&rtGUIBlurredBackground[2], "rtGUIBlurredBackground[2]");
+#endif
 	}
 
 	{
@@ -315,6 +316,7 @@ void RenderPath3D_PathTracing::Render( int mode ) const
 			getColorGradingEnabled() ? (scene->weather.colorGradingMap == nullptr ? nullptr : &scene->weather.colorGradingMap->texture) : nullptr
 		);
 
+#ifndef GGREDUCED
 		// GUI Background blurring:
 		{
 			auto range = wiProfiler::BeginRangeGPU("GUI Background Blur", cmd);
@@ -325,6 +327,7 @@ void RenderPath3D_PathTracing::Render( int mode ) const
 			device->EventEnd(cmd);
 			wiProfiler::EndRange(range);
 		}
+#endif
 	});
 	}
 

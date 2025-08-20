@@ -1323,10 +1323,8 @@ namespace wiScene
 		objects.Serialize(archive, seri);
 		aabb_objects.Serialize(archive, seri);
 		rigidbodies.Serialize(archive, seri);
-//#ifndef GGREDUCED //PE: Remove all physics checks, we dont use it.
 		//PE: Keep it here so we still can use wiscenes.
 		softbodies.Serialize(archive, seri);
-//#endif
 		armatures.Serialize(archive, seri);
 		lights.Serialize(archive, seri);
 		aabb_lights.Serialize(archive, seri);
@@ -1475,7 +1473,6 @@ namespace wiScene
 					component.Serialize(archive, seri);
 				}
 			}
-//#ifndef GGREDUCED //PE: Remove all physics checks, we dont use it.
 			{
 				bool component_exists;
 				archive >> component_exists;
@@ -1485,7 +1482,6 @@ namespace wiScene
 					component.Serialize(archive, seri);
 				}
 			}
-//#endif
 			{
 				bool component_exists;
 				archive >> component_exists;
@@ -1798,7 +1794,6 @@ namespace wiScene
 					archive << false;
 				}
 			}
-//#ifndef GGREDUCED //PE: Remove all physics checks, we dont use it.
 			{
 				auto component = softbodies.GetComponent(entity);
 				if (component != nullptr)
@@ -1811,7 +1806,6 @@ namespace wiScene
 					archive << false;
 				}
 			}
-//#endif
 			{
 				auto component = armatures.GetComponent(entity);
 				if (component != nullptr)

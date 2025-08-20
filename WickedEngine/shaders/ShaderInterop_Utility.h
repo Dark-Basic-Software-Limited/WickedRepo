@@ -23,7 +23,7 @@ CBUFFER(FilterEnvmapCB, CBSLOT_RENDERER_UTILITY)
 	uint filterArrayIndex;
 	float filterRoughness;
 	uint filterRayCount;
-	uint padding_filterCB;
+	float filterBrightness;
 };
 
 

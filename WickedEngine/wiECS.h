@@ -1,3 +1,4 @@
+
 #ifndef WI_ENTITY_COMPONENT_SYSTEM_H
 #define WI_ENTITY_COMPONENT_SYSTEM_H
 
@@ -9,37 +10,119 @@
 #include <vector>
 #include <unordered_map>
 #include <atomic>
+#include <mutex>
+#include <algorithm>
 
-#define CACHEARRAY 40000
 #define MAXVAL64 18446744073709551615
+//PE: Make sure we always allocate continuous memory blocks.
+#define DEFAULT_RESERVED_COUNT 50000
+
 namespace wiECS
 {
 	using Entity = uint32_t;
 	static const Entity INVALID_ENTITY = 0;
-	// Runtime can create a new entity with this
+
+	template<typename Component> class ComponentManager;
+
+	class ECSManager
+	{
+	private:
+		std::vector<Entity> m_freeIDs;
+		std::atomic<Entity> m_nextID = INVALID_ENTITY + 1;
+		std::unordered_map<Entity, size_t> m_componentCounts;
+		std::mutex m_mutex;
+
+		uint32_t m_reusedIDCount = 0;
+
+	public:
+
+		inline uint32_t GetReusedIDCount() const
+		{
+			return m_reusedIDCount;
+		}
+
+		inline uint32_t GetCurrentEntityCount() const
+		{
+			// Get the number of entities currently in use (not in the free list)
+			return m_nextID.load() - 1 - (uint32_t)m_freeIDs.size();
+		}
+
+		inline Entity CreateEntity()
+		{
+			std::lock_guard<std::mutex> lock(m_mutex);
+			if (!m_freeIDs.empty())
+			{
+				Entity id = m_freeIDs.back();
+				m_freeIDs.pop_back();
+				m_reusedIDCount++;
+				return id;
+			}
+			return m_nextID++;
+		}
+
+		inline void OnComponentAdded(Entity entity)
+		{
+			std::lock_guard<std::mutex> lock(m_mutex);
+			m_componentCounts[entity]++;
+		}
+
+		inline void OnComponentRemoved(Entity entity)
+		{
+			std::lock_guard<std::mutex> lock(m_mutex);
+			if (m_componentCounts.count(entity) > 0)
+			{
+				m_componentCounts[entity]--;
+				if (m_componentCounts[entity] == 0)
+				{
+					m_freeIDs.push_back(entity);
+					m_componentCounts.erase(entity);
+				}
+			}
+		}
+
+		void clear()
+		{
+			std::lock_guard<std::mutex> lock(m_mutex);
+			m_freeIDs.clear();
+			m_nextID = INVALID_ENTITY + 1;
+			m_componentCounts.clear();
+			m_reusedIDCount = 0;
+		}
+	};
+
+	extern ECSManager ecs;
+
+	inline uint32_t GetReusedEntityIDs()
+	{
+		return ecs.GetReusedIDCount();
+	}
+
+	inline uint32_t GetCurrentEntityCount()
+	{
+		return ecs.GetCurrentEntityCount();
+	}
+
 	inline Entity CreateEntity()
 	{
-		static std::atomic<Entity> next{ INVALID_ENTITY + 1 };
-		return next.fetch_add(1);
+		return ecs.CreateEntity();
 	}
 
 	struct EntitySerializer
 	{
-		wiJobSystem::context ctx; // allow components to spawn serialization subtasks
+		wiJobSystem::context ctx;
 		std::unordered_map<uint64_t, Entity> remap;
 		bool allow_remap = true;
 
 		~EntitySerializer()
 		{
-			wiJobSystem::Wait(ctx); // automatically wait for all subtasks after serialization
+			wiJobSystem::Wait(ctx);
 		}
 	};
-	// This is the safe way to serialize an entity
+
 	inline void SerializeEntity(wiArchive& archive, Entity& entity, EntitySerializer& seri)
 	{
 		if (archive.IsReadMode())
 		{
-			// Entities are always serialized as uint64_t for back-compat
 			uint64_t mem;
 			archive >> mem;
 
@@ -71,102 +154,97 @@ namespace wiECS
 	class ComponentManager
 	{
 	public:
-
-		// reservedCount : how much components can be held initially before growing the container
-		ComponentManager(size_t reservedCount = 0)
+		ComponentManager(size_t reservedCount = DEFAULT_RESERVED_COUNT)
 		{
 			components.reserve(reservedCount);
 			entities.reserve(reservedCount);
-			lookup.reserve(reservedCount);
-			#ifdef CACHEARRAY
-			if (b_cachearray_init)
-			{
-				for (int i = 0; i < CACHEARRAY; i++) cachearray[i] = MAXVAL64;
-				b_cachearray_init = false;
-			}
-			#endif
-
+			sparse.resize(reservedCount, ~0);
+		}
+		ComponentManager()
+		{
 		}
 
-		// Clear the whole container
 		inline void Clear()
 		{
+			for (Entity entity : entities)
+			{
+				ecs.OnComponentRemoved(entity);
+			}
 			components.clear();
 			entities.clear();
-			lookup.clear();
-			#ifdef CACHEARRAY
-			for (int i = 0; i < CACHEARRAY; i++) cachearray[i] = MAXVAL64;
-			b_cachearray_init = false;
-			//memset(&cachearray[0], MAXVAL64, sizeof(cachearray));
-			#endif
-
+			sparse.assign(sparse.size(), ~0);
 		}
 
-		// Perform deep copy of all the contents of "other" into this
 		inline void Copy(const ComponentManager<Component>& other)
 		{
 			Clear();
+			for (const Entity& entity : other.entities)
+			{
+				ecs.OnComponentAdded(entity);
+			}
 			components = other.components;
 			entities = other.entities;
-			lookup = other.lookup;
-			#ifdef CACHEARRAY
-			memcpy(&cachearray[0], &other.cachearray[0], sizeof(cachearray));
-			#endif
+			sparse = other.sparse;
 		}
 
-		// Merge in an other component manager of the same type to this. 
-		//	The other component manager MUST NOT contain any of the same entities!
-		//	The other component manager is not retained after this operation!
 		inline void Merge(ComponentManager<Component>& other)
 		{
 			components.reserve(GetCount() + other.GetCount());
 			entities.reserve(GetCount() + other.GetCount());
-			lookup.reserve(GetCount() + other.GetCount());
-
+			if (sparse.size() < other.sparse.size())
+			{
+				//PE: Make sure we always allocate continuous memory blocks
+				sparse.resize(other.sparse.size() + 5000, ~0);
+			}
 			for (size_t i = 0; i < other.GetCount(); ++i)
 			{
 				Entity entity = other.entities[i];
 				assert(!Contains(entity));
 				entities.push_back(entity);
-				lookup[entity] = components.size();
-				#ifdef CACHEARRAY
-				if (entity < CACHEARRAY)
-					cachearray[entity] = components.size();
-				#endif
+				if (entity >= sparse.size())
+				{
+					//PE: Make sure we always allocate continuous memory blocks
+					sparse.resize(entity + 5000, ~0);
+				}
+				sparse[entity] = components.size();
 				components.push_back(std::move(other.components[i]));
+				ecs.OnComponentAdded(entity);
 			}
-
 			other.Clear();
 		}
 
-		// Read/Write everything to an archive depending on the archive state
 		inline void Serialize(wiArchive& archive, EntitySerializer& seri)
 		{
 			if (archive.IsReadMode())
 			{
-				Clear(); // If we deserialize, we start from empty
-
+				Clear();
 				size_t count;
 				archive >> count;
-
 				components.resize(count);
 				for (size_t i = 0; i < count; ++i)
 				{
 					components[i].Serialize(archive, seri);
 				}
-
 				entities.resize(count);
+				size_t max_entity = 0;
 				for (size_t i = 0; i < count; ++i)
 				{
 					Entity entity;
 					SerializeEntity(archive, entity, seri);
 					entities[i] = entity;
-					lookup[entity] = i;
-					#ifdef CACHEARRAY
-					if (entity < CACHEARRAY)
-						cachearray[entity] = i;
-					#endif
-
+					if (entity > max_entity)
+					{
+						max_entity = entity;
+					}
+					ecs.OnComponentAdded(entity);
+				}
+				if (max_entity + 1 > sparse.size()) {
+					//PE: Make sure we always allocate continuous memory blocks
+					sparse.resize(max_entity + 5000, ~0);
+				}
+				for (size_t i = 0; i < count; ++i)
+				{
+					sparse[entities[i]] = i;
 				}
 			}
 			else
@@ -183,279 +261,156 @@ namespace wiECS
 			}
 		}
 
-		// Create a new component and retrieve a reference to it
 		inline Component& Create(Entity entity)
 		{
-			// INVALID_ENTITY is not allowed!
 			assert(entity != INVALID_ENTITY);
-
-			// Only one of this component type per entity is allowed!
-			assert(lookup.find(entity) == lookup.end());
-
-			// Entity count must always be the same as the number of coponents!
-			assert(entities.size() == components.size());
-			assert(lookup.size() == components.size());
-
-			// Update the entity lookup table:
-			lookup[entity] = components.size();
-			#ifdef CACHEARRAY
-			if (entity < CACHEARRAY)
-				cachearray[entity] = components.size();
-			#endif
-
-			// New components are always pushed to the end:
-			components.emplace_back();
-
-			// Also push corresponding entity:
-			entities.push_back(entity);
-			#ifdef CACHEARRAY
-			if (b_cachearray_init)
+			if (entity >= sparse.size())
 			{
-				for (int i = 0; i < CACHEARRAY; i++) cachearray[i] = MAXVAL64;
-				b_cachearray_init = false;
+				//PE: Make sure we always allocate continuous memory blocks
+				sparse.resize(entity + 5000, ~0);
 			}
-			#endif
+			assert(sparse[entity] == ~0);
+
+			sparse[entity] = components.size();
+			components.emplace_back();
+			entities.push_back(entity);
+
+			ecs.OnComponentAdded(entity);
 			return components.back();
 		}
 
-		// Remove a component of a certain entity if it exists
 		inline void Remove(Entity entity)
 		{
-			#ifdef CACHEARRAY
-			if (b_cachearray_init)
+			if (entity < sparse.size() && sparse[entity] != ~0)
 			{
-				for (int i = 0; i < CACHEARRAY; i++) cachearray[i] = MAXVAL64;
-				b_cachearray_init = false;
-			}
-			#endif
-
-			auto it = lookup.find(entity);
-			if (it != lookup.end())
-			{
-				// Directly index into components and entities array:
-				const size_t index = it->second;
-				const Entity entity = entities[index];
+				const size_t index = sparse[entity];
+				const Entity entity_to_remove = entities[index];
 
 				if (index < components.size() - 1)
 				{
-					// Swap out the dead element with the last one:
-					components[index] = std::move(components.back()); // try to use move instead of copy
+					components[index] = std::move(components.back());
 					entities[index] = entities.back();
-
-					// Update the lookup table:
-					lookup[entities[index]] = index;
-					#ifdef CACHEARRAY
-					if (entities[index] < CACHEARRAY)
-						cachearray[entities[index]] = index;
-					#endif
-
+					if (entities[index] < sparse.size()) {
+						sparse[entities[index]] = index;
+					}
 				}
-
-				// Shrink the container:
 				components.pop_back();
 				entities.pop_back();
-				lookup.erase(entity);
-				#ifdef CACHEARRAY
-				if(entity < CACHEARRAY)
-					cachearray[entity] = MAXVAL64;
-				#endif
+				if (entity_to_remove < sparse.size()) {
+					sparse[entity_to_remove] = ~0;
+				}
 
+				ecs.OnComponentRemoved(entity_to_remove);
 			}
 		}
 
-		// Remove a component of a certain entity if it exists while keeping the current ordering
 		inline void Remove_KeepSorted(Entity entity)
 		{
-			#ifdef CACHEARRAY
-			if (b_cachearray_init)
+			if (entity < sparse.size() && sparse[entity] != ~0)
 			{
-				for (int i = 0; i < CACHEARRAY; i++) cachearray[i] = MAXVAL64;
-				b_cachearray_init = false;
-			}
-			#endif
-
-			auto it = lookup.find(entity);
-			if (it != lookup.end())
-			{
-				// Directly index into components and entities array:
-				const size_t index = it->second;
-				const Entity entity = entities[index];
+				const size_t index = sparse[entity];
+				const Entity entity_to_remove = entities[index];
 
 				if (index < components.size() - 1)
 				{
-					// Move every component left by one that is after this element:
 					for (size_t i = index + 1; i < components.size(); ++i)
 					{
 						components[i - 1] = std::move(components[i]);
 					}
-					// Move every entity left by one that is after this element and update lut:
 					for (size_t i = index + 1; i < entities.size(); ++i)
 					{
 						entities[i - 1] = entities[i];
-						lookup[entities[i - 1]] = i - 1;
-						#ifdef CACHEARRAY
-						if (entities[i - 1] < CACHEARRAY)
-							cachearray[entities[i - 1]] = i - 1;
-						#endif
-
+						if (entities[i - 1] < sparse.size()) {
+							sparse[entities[i - 1]] = i - 1;
+						}
 					}
 				}
 
-				// Shrink the container:
 				components.pop_back();
 				entities.pop_back();
-				lookup.erase(entity);
-				#ifdef CACHEARRAY
-				if (entity < CACHEARRAY)
-					cachearray[entity] = MAXVAL64;
-				#endif
-
+				if (entity_to_remove < sparse.size()) {
+					sparse[entity_to_remove] = ~0;
+				}
+				ecs.OnComponentRemoved(entity_to_remove);
 			}
 		}
 
-		// Place an entity-component to the specified index position while keeping the ordering intact
 		inline void MoveItem(size_t index_from, size_t index_to)
 		{
-			#ifdef CACHEARRAY
-			if (b_cachearray_init)
-			{
-				for (int i = 0; i < CACHEARRAY; i++) cachearray[i] = MAXVAL64;
-				b_cachearray_init = false;
-			}
-			#endif
-
 			assert(index_from < GetCount());
 			assert(index_to < GetCount());
 			if (index_from == index_to)
 			{
 				return;
 			}
-
-			// Save the moved component and entity:
 			Component component = std::move(components[index_from]);
 			Entity entity = entities[index_from];
 
-			// Every other entity-component that's in the way gets moved by one and lut is kept updated:
 			const int direction = index_from < index_to ? 1 : -1;
 			for (size_t i = index_from; i != index_to; i += direction)
 			{
 				const size_t next = i + direction;
 				components[i] = std::move(components[next]);
 				entities[i] = entities[next];
-				lookup[entities[i]] = i;
-				#ifdef CACHEARRAY
-				if (entities[i] < CACHEARRAY)
-					cachearray[entities[i]] = i;
-				#endif
-
+				if (entities[i] < sparse.size()) {
+					sparse[entities[i]] = i;
+				}
 			}
-
-			// Saved entity-component moved to the required position:
 			components[index_to] = std::move(component);
 			entities[index_to] = entity;
-			lookup[entity] = index_to;
-			#ifdef CACHEARRAY
-			if (entity < CACHEARRAY)
-				cachearray[entity] = index_to;
-			#endif
+			if (entity < sparse.size()) {
+				sparse[entity] = index_to;
+			}
 		}
 
-		// Check if a component exists for a given entity or not
 		inline bool Contains(Entity entity) const
 		{
-			#ifdef CACHEARRAY
-			if (entity < CACHEARRAY)
-				if (cachearray[entity] < MAXVAL64 ) return true;
-			#endif
-
-			return lookup.find(entity) != lookup.end();
+			if (entity >= sparse.size())
+			{
+				return false;
+			}
+			return sparse[entity] != ~0;
 		}
 
-		// Retrieve a [read/write] component specified by an entity (if it exists, otherwise nullptr)
 		inline Component* GetComponent(Entity entity)
 		{
-			#ifdef CACHEARRAY
-			if (entity < CACHEARRAY)
+			if (entity < sparse.size() && sparse[entity] != ~0)
 			{
-				if(cachearray[entity] < MAXVAL64)
-					return &components[cachearray[entity]];
-				else
-					return nullptr;
-			}
-			#endif
-			auto it = lookup.find(entity);
-
-			if (it != lookup.end())
-			{
-				return &components[it->second];
+				return &components[sparse[entity]];
 			}
 			return nullptr;
 		}
 
-		// Retrieve a [read only] component specified by an entity (if it exists, otherwise nullptr)
 		inline const Component* GetComponent(Entity entity) const
 		{
-			#ifdef CACHEARRAY
-			if (entity < CACHEARRAY)
+			if (entity < sparse.size() && sparse[entity] != ~0)
 			{
-				if (cachearray[entity] < MAXVAL64)
-					return &components[cachearray[entity]];
-			}
-			#endif
-			const auto it = lookup.find(entity);
-			if (it != lookup.end())
-			{
-				return &components[it->second];
+				return &components[sparse[entity]];
 			}
 			return nullptr;
 		}
 
-		// Retrieve component index by entity handle (if not exists, returns ~0 value)
-		inline size_t GetIndex(Entity entity) const 
+		inline size_t GetIndex(Entity entity) const
 		{
-			#ifdef CACHEARRAY
-			if (entity < CACHEARRAY)
+			if (entity < sparse.size())
 			{
-				if (cachearray[entity] < MAXVAL64)
-					return cachearray[entity];
-			}
-			#endif
-
-			const auto it = lookup.find(entity);
-			if (it != lookup.end())
-			{
-				return it->second;
+				return sparse[entity];
 			}
 			return ~0;
 		}
 
-		// Retrieve the number of existing entries
 		inline size_t GetCount() const { return components.size(); }
-
-		// Directly index a specific component without indirection
-		//	0 <= index < GetCount()
+		inline size_t GetEntitiesCount() const { return entities.size(); }
+		inline size_t GetSparseCount() const { return sparse.size(); }
 		inline Entity GetEntity(size_t index) const { return entities[index]; }
-
-		// Directly index a specific [read/write] component without indirection
-		//	0 <= index < GetCount()
+		inline const std::vector<Entity>& GetEntities() const { return entities; }
 		inline Component& operator[](size_t index) { return components[index]; }
-
-		// Directly index a specific [read only] component without indirection
-		//	0 <= index < GetCount()
 		inline const Component& operator[](size_t index) const { return components[index]; }
 
 	private:
-		// This is a linear array of alive components
 		std::vector<Component> components;
-		// This is a linear array of entities corresponding to each alive component
 		std::vector<Entity> entities;
-		// This is a lookup table for entities
-		std::unordered_map<Entity, size_t> lookup;
-		#ifdef CACHEARRAY
-		size_t cachearray[CACHEARRAY];
-		bool b_cachearray_init = true;
-		#endif
-		// Disallow this to be copied by mistake
+		std::vector<size_t> sparse;
 		ComponentManager(const ComponentManager&) = delete;
 	};
 }

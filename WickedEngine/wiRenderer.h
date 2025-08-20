@@ -239,6 +239,25 @@ namespace wiRenderer
 		bool distortion, 
 		wiGraphics::CommandList cmd
 	);
+	void DrawSoftParticles_Init(
+		const Visibility& vis,
+		const wiGraphics::Texture& lineardepth,
+		bool distortion,
+		wiGraphics::CommandList cmd
+	);
+	void DrawSoftParticles_Done(
+		const Visibility& vis,
+		const wiGraphics::Texture& lineardepth,
+		bool distortion,
+		wiGraphics::CommandList cmd
+	);
+	void DrawSoftParticles_Distance(
+		const Visibility& vis,
+		bool distortion,
+		wiGraphics::CommandList cmd,
+		float distance
+	);
+
 	// Draw simple light visualizer geometries
 	void DrawLightVisualizers(
 		const Visibility& vis,

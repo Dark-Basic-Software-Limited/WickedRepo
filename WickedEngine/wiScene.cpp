@@ -18,6 +18,16 @@
 #ifdef OPTICK_ENABLE
 #include "optick.h"
 #endif
+
+#define mymin(a,b) (a > b ? a : b)
+#include <thread>
+#include <vector>
+#include <atomic>
+#include <mutex>
+#include <numeric>
+#include <future>
+#include <queue>
+
 #endif
 
 #ifdef SHADERCOMPILER
@@ -1725,9 +1735,10 @@ namespace wiScene
 #else
 		RunHierarchyUpdateSystem(ctx);
 #endif
-
+#ifndef GGREDUCED
 		RunSpringUpdateSystem(ctx);
 		RunInverseKinematicsUpdateSystem(ctx);
+#endif
 		RunArmatureUpdateSystem(ctx);
 
 #ifndef MTHREAD_HIERARCHY
@@ -1736,7 +1747,9 @@ namespace wiScene
 		RunMaterialUpdateSystem(ctx);
 #endif
 
+#ifndef GGREDUCED
 		RunImpostorUpdateSystem(ctx);
+#endif
 		RunWeatherUpdateSystem(ctx);
 
 #ifndef GGREDUCED
@@ -1910,9 +1923,7 @@ namespace wiScene
 		objects.Clear();
 		aabb_objects.Clear();
 		rigidbodies.Clear();
-#ifndef GGREDUCED //PE: Remove all physics checks, we dont use it.
 		softbodies.Clear();
-#endif
 		armatures.Clear();
 		lights.Clear();
 		aabb_lights.Clear();
@@ -1930,7 +1941,6 @@ namespace wiScene
 		sounds.Clear();
 		inverse_kinematics.Clear();
 		springs.Clear();
-
 		TLAS = RaytracingAccelerationStructure();
 		BVH.Clear();
 		packedDecals.clear();
@@ -1949,9 +1959,7 @@ namespace wiScene
 		objects.Merge(other.objects);
 		aabb_objects.Merge(other.aabb_objects);
 		rigidbodies.Merge(other.rigidbodies);
-#ifndef GGREDUCED //PE: Remove all physics checks, we dont use it.
 		softbodies.Merge(other.softbodies);
-#endif
 		armatures.Merge(other.armatures);
 		lights.Merge(other.lights);
 		aabb_lights.Merge(other.aabb_lights);
@@ -1969,7 +1977,6 @@ namespace wiScene
 		sounds.Merge(other.sounds);
 		inverse_kinematics.Merge(other.inverse_kinematics);
 		springs.Merge(other.springs);
-
 		bounds = AABB::Merge(bounds, other.bounds);
 	}
 
@@ -1987,9 +1994,7 @@ namespace wiScene
 		objects.Remove(entity);
 		aabb_objects.Remove(entity);
 		rigidbodies.Remove(entity);
-#ifndef GGREDUCED //PE: Remove all physics checks, we dont use it.
 		softbodies.Remove(entity);
-#endif
 		armatures.Remove(entity);
 		lights.Remove(entity);
 		aabb_lights.Remove(entity);
@@ -2211,6 +2216,7 @@ namespace wiScene
 
 		return entity;
 	}
+#ifndef GGREDUCED
 	Entity Scene::Entity_CreateHair(
 		const std::string& name,
 		const XMFLOAT3& position
@@ -2230,6 +2236,7 @@ namespace wiScene
 
 		return entity;
 	}
+#endif
 	Entity Scene::Entity_CreateSound(
 		const std::string& name,
 		const std::string& filename,
@@ -3109,7 +3116,7 @@ OPTICK_EVENT();
 		}
 	}
 #endif
-
+#ifndef GGREDUCED
 	void Scene::RunSpringUpdateSystem(wiJobSystem::context& ctx)
 	{
 #ifdef GGREDUCED
@@ -3203,6 +3210,8 @@ OPTICK_EVENT();
 			*((XMFLOAT3*)&transform->world._41) = spring.center_of_mass;
 		}
 	}
+#endif
+#ifndef GGREDUCED
 	void Scene::RunInverseKinematicsUpdateSystem(wiJobSystem::context& ctx)
 	{
 #ifdef GGREDUCED
@@ -3307,6 +3316,7 @@ OPTICK_EVENT();
 			}
 		}
 	}
+#endif
 	void Scene::RunArmatureUpdateSystem(wiJobSystem::context& ctx)
 	{
 #ifdef GGREDUCED
@@ -3357,6 +3367,14 @@ OPTICK_EVENT();
 				boneAABB.createFromHalfWidth(bonepos, XMFLOAT3(bone_radius, bone_radius, bone_radius));
 				_min = wiMath::Min(_min, boneAABB._min);
 				_max = wiMath::Max(_max, boneAABB._max);
+			}
+
+			if (armature.boneMatrices.size() != armature.boneData.size())
+			{
+				armature.boneMatrices.resize(armature.boneData.size());
+			}
+			for (size_t i = 0; i < armature.boneData.size(); ++i) {
+				armature.boneMatrices[i] = armature.boneData[i].Load();
 			}
 
 			armature.aabb = AABB(_min, _max);
@@ -3574,6 +3592,9 @@ OPTICK_EVENT();
 
 		});
 	}
+
+#ifndef GGREDUCED
+
 	void Scene::RunImpostorUpdateSystem(wiJobSystem::context& ctx)
 	{
 #ifdef GGREDUCED
@@ -3646,6 +3667,7 @@ OPTICK_EVENT();
 			}
 		});
 	}
+#endif
 	void Scene::RunObjectUpdateSystem(wiJobSystem::context& ctx)
 	{
 #ifdef GGREDUCED
@@ -3802,7 +3824,7 @@ OPTICK_EVENT();
 							}
 						}
 					}
-
+#ifndef GGREDUCED
 					ImpostorComponent* impostor = impostors.GetComponent(object.meshID);
 					if (impostor != nullptr)
 					{
@@ -3825,7 +3847,7 @@ OPTICK_EVENT();
 						);
 						locker.unlock();
 					}
-
+#endif
 #ifndef GGREDUCED //PE: Remove all physics checks, we dont use it.
 					SoftBodyPhysicsComponent* softbody = softbodies.GetComponent(object.meshID);
 					if (softbody != nullptr)
@@ -4331,7 +4353,7 @@ OPTICK_EVENT();
 			emitter.UpdateCPU(transform, dt);
 		});
 */
-
+#ifndef GGREDUCED
 		wiJobSystem::Dispatch(ctx, (uint32_t)hairs.GetCount(), small_subtask_groupsize, [&](wiJobArgs args) {
 
 			wiHairParticle& hair = hairs[args.jobIndex];
@@ -4356,6 +4378,7 @@ OPTICK_EVENT();
 			}
 
 		});
+#endif
 	}
 	void Scene::RunWeatherUpdateSystem(wiJobSystem::context& ctx)
 	{
@@ -4425,7 +4448,55 @@ OPTICK_EVENT();
 		waterRipples.push_back(img);
 	}
 
+	//PE: 20x faster SkinVertex :)
 	XMVECTOR SkinVertex(const MeshComponent& mesh, const ArmatureComponent& armature, uint32_t index, XMVECTOR* N)
+	{
+		XMVECTOR P;
+		if (mesh.vertex_positions_morphed.empty())
+		{
+			P = XMLoadFloat3(&mesh.vertex_positions[index]);
+		}
+		else
+		{
+			P = mesh.vertex_positions_morphed[index].LoadPOS();
+		}
+
+#ifdef GGREDUCED
+		if (index >= mesh.vertex_boneindices.size() || index >= mesh.vertex_boneweights.size())
+		{
+			return P;
+		}
+#endif
+		const XMUINT4& ind = mesh.vertex_boneindices[index];
+		const XMFLOAT4& wei = mesh.vertex_boneweights[index];
+
+		//PE: used saved matrices
+		XMMATRIX M0 = armature.boneMatrices[ind.x] * wei.x;
+		XMMATRIX M1 = armature.boneMatrices[ind.y] * wei.y;
+		XMMATRIX M2 = armature.boneMatrices[ind.z] * wei.z;
+		XMMATRIX M3 = armature.boneMatrices[ind.w] * wei.w;
+
+		//XMMATRIX M0 = armature.boneData[ind.x].Load() * wei.x;
+		//XMMATRIX M1 = armature.boneData[ind.y].Load() * wei.y;
+		//XMMATRIX M2 = armature.boneData[ind.z].Load() * wei.z;
+		//XMMATRIX M3 = armature.boneData[ind.w].Load() * wei.w;
+
+
+		XMMATRIX finalMatrix = M0 + M1 + M2 + M3;
+
+		//PE: Only use one XMVector3Transform
+		P = XMVector3Transform(P, finalMatrix);
+
+		if (N != nullptr)
+		{
+			*N = XMLoadFloat3(&mesh.vertex_normals[index]);
+			*N = XMVector3Normalize(XMVector3TransformNormal(*N, finalMatrix));
+		}
+
+		return P;
+	}
+
+	XMVECTOR SkinVertex_OLD(const MeshComponent& mesh, const ArmatureComponent& armature, uint32_t index, XMVECTOR* N)
 	{
 		XMVECTOR P;
 		if (mesh.vertex_positions_morphed.empty())
@@ -4526,7 +4597,579 @@ OPTICK_EVENT();
 		return INVALID_ENTITY;
 	}
 
+	//------------------------------------------------------------------------
+//#define REMOVE_THREAD_PICK
+
+#ifndef REMOVE_THREAD_PICK
+	struct ThreadResult
+	{
+		float distance = FLT_MAX;
+		Entity entity = INVALID_ENTITY;
+		XMFLOAT3 position;
+		XMFLOAT3 normal;
+		int subsetIndex = -1;
+		int vertexID0 = -1;
+		int vertexID1 = -1;
+		int vertexID2 = -1;
+		XMFLOAT2 bary;
+	};
+
+	class ThreadPool {
+	public:
+		ThreadPool(size_t threads) : stop(false) {
+			for (size_t i = 0; i < threads; ++i) {
+				workers.emplace_back([this] {
+					while (true) {
+						std::function<void()> task;
+						{
+							std::unique_lock<std::mutex> lock(this->queue_mutex);
+							this->condition.wait(lock, [this] { return this->stop || !this->tasks.empty(); });
+							if (this->stop && this->tasks.empty())
+								return;
+							task = std::move(this->tasks.front());
+							this->tasks.pop();
+						}
+						task();
+					}
+					});
+			}
+		}
+
+		template<class F, class... Args>
+		auto enqueue(F&& f, Args&&... args) -> std::future<typename std::result_of<F(Args...)>::type> {
+			using return_type = typename std::result_of<F(Args...)>::type;
+			auto task = std::make_shared<std::packaged_task<return_type()>>(
+				std::bind(std::forward<F>(f), std::forward<Args>(args)...)
+			);
+			std::future<return_type> res = task->get_future();
+			{
+				std::unique_lock<std::mutex> lock(queue_mutex);
+				if (stop)
+					throw std::runtime_error("enqueue on stopped ThreadPool");
+				tasks.emplace([task]() { (*task)(); });
+			}
+			condition.notify_one();
+			return res;
+		}
+
+		~ThreadPool() {
+			{
+				std::unique_lock<std::mutex> lock(queue_mutex);
+				stop = true;
+			}
+			condition.notify_all();
+			for (std::thread& worker : workers)
+				worker.join();
+		}
+
+	private:
+		std::vector<std::thread> workers;
+		std::queue<std::function<void()>> tasks;
+		std::mutex queue_mutex;
+		std::condition_variable condition;
+		bool stop;
+	};
+
+	static ThreadPool pool(std::thread::hardware_concurrency());
+
+	ThreadResult ProcessObjectPicking(
+		const uint32_t index,
+		const ObjectComponent& object,
+		const Scene& scene,
+		const RAY& ray,
+		uint32_t renderTypeMask,
+		uint32_t layerMask,
+		const XMVECTOR& rayOrigin,
+		const XMVECTOR& rayDirection,
+		std::atomic<float>& closestDistance)
+	{
+		ThreadResult localResult;
+
+
+		Entity entity = scene.aabb_objects.GetEntity(index);
+		const LayerComponent* layer = scene.layers.GetComponent(entity);
+		if (layer != nullptr && !(layer->GetLayerMask() & layerMask))
+		{
+			return localResult;
+		}
+
+		const MeshComponent& mesh = *scene.meshes.GetComponent(object.meshID);
+		const XMMATRIX objectMat = object.transform_index >= 0 ? XMLoadFloat4x4(&scene.transforms[object.transform_index].world) : XMMatrixIdentity();
+		const XMMATRIX objectMat_Inverse = XMMatrixInverse(nullptr, objectMat);
+		const XMVECTOR rayOrigin_local = XMVector3Transform(rayOrigin, objectMat_Inverse);
+		const XMVECTOR rayDirection_local = XMVector3Normalize(XMVector3TransformNormal(rayDirection, objectMat_Inverse));
+
+		RAY localRay(rayOrigin_local, rayDirection_local);
+
+		const ArmatureComponent* armature = mesh.IsSkinned() ? scene.armatures.GetComponent(mesh.armatureID) : nullptr;
+		int subsetCounter = 0;
+		int count = 0;
+		int target_lod = 0;
+		if (bRaycastLowestLOD)
+			target_lod = mesh.lodlevels;
+
+		for (auto& subset : mesh.subsets)
+		{
+			if (count++ != target_lod) continue;
+
+			if (closestDistance < localResult.distance) {
+				localResult.distance = closestDistance;
+			}
+
+			bool bEarlyExit = false;
+			if (subset.subAABBactive && subset.usedAABB > 0)
+			{
+				// BVH AABB
+				for (size_t j = 0; j < subset.usedAABB; ++j)
+				{
+					if (localResult.distance < closestDistance) {
+						closestDistance = localResult.distance;
+					}
+
+					if (localRay.intersects(subset.subAABB[j]) && closestDistance > localRay.intersects(subset.subAABB[j]))
+					{
+						// For each triangle in the AABB
+						for (size_t i_sub = 0; i_sub + 2 < subset.subAABB_index_count[j]; i_sub += 3)
+						{
+							if (bEarlyExit) break;
+							const uint32_t i0 = mesh.indices[subset.subAABB_index_offset[j] + i_sub + 0];
+							const uint32_t i1 = mesh.indices[subset.subAABB_index_offset[j] + i_sub + 1];
+							const uint32_t i2 = mesh.indices[subset.subAABB_index_offset[j] + i_sub + 2];
+
+							XMVECTOR p0, p1, p2;
+							if (armature == nullptr) {
+								if (mesh.vertex_positions_morphed.empty()) {
+									p0 = XMLoadFloat3(&mesh.vertex_positions[i0]);
+									p1 = XMLoadFloat3(&mesh.vertex_positions[i1]);
+									p2 = XMLoadFloat3(&mesh.vertex_positions[i2]);
+								}
+								else {
+									p0 = mesh.vertex_positions_morphed[i0].LoadPOS();
+									p1 = mesh.vertex_positions_morphed[i1].LoadPOS();
+									p2 = mesh.vertex_positions_morphed[i2].LoadPOS();
+								}
+							}
+							else {
+								p0 = SkinVertex(mesh, *armature, i0);
+								p1 = SkinVertex(mesh, *armature, i1);
+								p2 = SkinVertex(mesh, *armature, i2);
+							}
+							float distance;
+							XMFLOAT2 bary;
+							if (wiMath::RayTriangleIntersects(rayOrigin_local, rayDirection_local, p0, p1, p2, distance, bary))
+							{
+								const XMVECTOR pos = XMVector3Transform(XMVectorAdd(rayOrigin_local, rayDirection_local * distance), objectMat);
+								distance = wiMath::Distance(pos, rayOrigin);
+								if (distance < localResult.distance)
+								{
+									const XMVECTOR nor = XMVector3Normalize(XMVector3TransformNormal(XMVector3Cross(XMVectorSubtract(p2, p1), XMVectorSubtract(p1, p0)), objectMat));
+#ifdef GGREDUCED
+									if (XMVectorGetX(XMVector3Dot(nor, rayDirection)) <= 0.0f || mesh.IsDoubleSided() == true)
+									{
+#endif
+										localResult.entity = entity;
+										XMStoreFloat3(&localResult.position, pos);
+										XMStoreFloat3(&localResult.normal, nor);
+										localResult.distance = distance;
+										localResult.subsetIndex = subsetCounter;
+										localResult.vertexID0 = (int)i0;
+										localResult.vertexID1 = (int)i1;
+										localResult.vertexID2 = (int)i2;
+										localResult.bary = bary;
+										if (ray.bIgnoreNearestTriangle)
+											bEarlyExit = true;
+#ifdef GGREDUCED
+									}
+#endif
+								}
+							}
+						}
+					}
+				}
+			}
+			else
+			{
+				// Fallback for non-BVH meshes
+				for (size_t i = 0; i < subset.indexCount; i += 3)
+				{
+					if (localResult.distance < closestDistance) {
+						closestDistance = localResult.distance;
+					}
+					if (localResult.distance < closestDistance || bEarlyExit) break;
+					const uint32_t i0 = mesh.indices[subset.indexOffset + i + 0];
+					const uint32_t i1 = mesh.indices[subset.indexOffset + i + 1];
+					const uint32_t i2 = mesh.indices[subset.indexOffset + i + 2];
+
+					XMVECTOR p0, p1, p2;
+					if (armature == nullptr) {
+						if (mesh.vertex_positions_morphed.empty()) {
+							p0 = XMLoadFloat3(&mesh.vertex_positions[i0]);
+							p1 = XMLoadFloat3(&mesh.vertex_positions[i1]);
+							p2 = XMLoadFloat3(&mesh.vertex_positions[i2]);
+						}
+						else {
+							p0 = mesh.vertex_positions_morphed[i0].LoadPOS();
+							p1 = mesh.vertex_positions_morphed[i1].LoadPOS();
+							p2 = mesh.vertex_positions_morphed[i2].LoadPOS();
+						}
+					}
+					else {
+						p0 = SkinVertex(mesh, *armature, i0);
+						p1 = SkinVertex(mesh, *armature, i1);
+						p2 = SkinVertex(mesh, *armature, i2);
+					}
+					float distance;
+					XMFLOAT2 bary;
+					if (wiMath::RayTriangleIntersects(rayOrigin_local, rayDirection_local, p0, p1, p2, distance, bary))
+					{
+						const XMVECTOR pos = XMVector3Transform(XMVectorAdd(rayOrigin_local, rayDirection_local * distance), objectMat);
+						distance = wiMath::Distance(pos, rayOrigin);
+						if (distance < localResult.distance)
+						{
+							const XMVECTOR nor = XMVector3Normalize(XMVector3TransformNormal(XMVector3Cross(XMVectorSubtract(p2, p1), XMVectorSubtract(p1, p0)), objectMat));
+#ifdef GGREDUCED
+							if (XMVectorGetX(XMVector3Dot(nor, rayDirection)) <= 0.0f || mesh.IsDoubleSided() == true)
+							{
+#endif
+								localResult.entity = entity;
+								XMStoreFloat3(&localResult.position, pos);
+								XMStoreFloat3(&localResult.normal, nor);
+								localResult.distance = distance;
+								localResult.subsetIndex = subsetCounter;
+								localResult.vertexID0 = (int)i0;
+								localResult.vertexID1 = (int)i1;
+								localResult.vertexID2 = (int)i2;
+								localResult.bary = bary;
+								if (ray.bIgnoreNearestTriangle)
+									bEarlyExit = true;
+#ifdef GGREDUCED
+							}
+#endif
+						}
+					}
+				}
+			}
+			subsetCounter++;
+		}
+		return localResult;
+	}
+#endif
+
+	PickResult PickThread(const RAY& ray, uint32_t renderTypeMask, uint32_t layerMask, const Scene& scene)
+	{
+#ifdef REMOVE_THREAD_PICK
+
+		return Pick(ray,renderTypeMask,layerMask,scene);
+
+#else
+		PickResult result;
+		if (scene.objects.GetCount() == 0) return result;
+
+		const XMVECTOR rayOrigin = XMLoadFloat3(&ray.origin);
+		const XMVECTOR rayDirection = XMVector3Normalize(XMLoadFloat3(&ray.direction));
+
+		std::vector<std::future<ThreadResult>> futures;
+		std::atomic<float> closestDistance(FLT_MAX);
+
+		for (size_t i = 0; i < scene.objects.GetCount(); ++i)
+		{
+			const AABB& aabb = scene.aabb_objects[i];
+			if (!ray.intersects(aabb))
+			{
+				continue;
+			}
+
+			const ObjectComponent& object = scene.objects[i];
+			if (object.meshID == INVALID_ENTITY)
+			{
+				continue;
+			}
+			if (!(renderTypeMask & object.GetRenderTypes()))
+			{
+				continue;
+			}
+
+#ifdef GGREDUCED
+			if (!object.IsRenderable())
+			{
+				//PE: Do not Pick from hidden objects.
+				continue;
+			}
+#endif
+
+
+			futures.push_back(
+				pool.enqueue(
+					ProcessObjectPicking,
+					i,
+					std::cref(object),
+					std::cref(scene),
+					std::cref(ray),
+					renderTypeMask,
+					layerMask,
+					rayOrigin,
+					rayDirection,
+					std::ref(closestDistance)
+				)
+			);
+		}
+
+		for (auto& fut : futures) {
+			ThreadResult localResult = fut.get();
+			if (localResult.distance < result.distance) {
+				result.entity = localResult.entity;
+				result.position = localResult.position;
+				result.normal = localResult.normal;
+				result.distance = localResult.distance;
+				result.subsetIndex = localResult.subsetIndex;
+				result.vertexID0 = localResult.vertexID0;
+				result.vertexID1 = localResult.vertexID1;
+				result.vertexID2 = localResult.vertexID2;
+				result.bary = localResult.bary;
+			}
+		}
+
+		XMVECTOR N = XMLoadFloat3(&result.normal);
+		XMVECTOR P = XMLoadFloat3(&result.position);
+		XMVECTOR E = XMLoadFloat3(&ray.origin);
+		XMVECTOR T = XMVector3Normalize(XMVector3Cross(N, P - E));
+		XMVECTOR B = XMVector3Normalize(XMVector3Cross(T, N));
+		XMMATRIX M = { T, N, B, P };
+		XMStoreFloat4x4(&result.orientation, M);
+
+		return result;
+#endif
+	}
+
 	PickResult Pick(const RAY& ray, uint32_t renderTypeMask, uint32_t layerMask, const Scene& scene)
+	{
+		PickResult result;
+
+		if (scene.objects.GetCount() > 0)
+		{
+			const XMVECTOR rayOrigin = XMLoadFloat3(&ray.origin);
+			const XMVECTOR rayDirection = XMVector3Normalize(XMLoadFloat3(&ray.direction));
+			
+			for (size_t i = 0; i < scene.aabb_objects.GetCount(); ++i)
+			{
+				const AABB& aabb = scene.aabb_objects[i];
+				if (!ray.intersects(aabb))
+				{
+					continue;
+				}
+
+				const ObjectComponent& object = scene.objects[i];
+				if (object.meshID == INVALID_ENTITY)
+				{
+					continue;
+				}
+				if (!(renderTypeMask & object.GetRenderTypes()))
+				{
+					continue;
+				}
+
+#ifdef GGREDUCED
+				if (!object.IsRenderable())
+				{
+					//PE: Do not Pick from hidden objects.
+					continue;
+				}
+#endif
+				Entity entity = scene.aabb_objects.GetEntity(i);
+				const LayerComponent* layer = scene.layers.GetComponent(entity);
+				if (layer != nullptr && !(layer->GetLayerMask() & layerMask))
+				{
+					continue;
+				}
+
+				const MeshComponent& mesh = *scene.meshes.GetComponent(object.meshID);
+				const bool softbody_active = false;
+
+				const XMMATRIX objectMat = object.transform_index >= 0 ? XMLoadFloat4x4(&scene.transforms[object.transform_index].world) : XMMatrixIdentity();
+				const XMMATRIX objectMat_Inverse = XMMatrixInverse(nullptr, objectMat);
+
+				const XMVECTOR rayOrigin_local = XMVector3Transform(rayOrigin, objectMat_Inverse);
+				const XMVECTOR rayDirection_local = XMVector3Normalize(XMVector3TransformNormal(rayDirection, objectMat_Inverse));
+
+				RAY localRay(rayOrigin_local, rayDirection_local);
+
+				const ArmatureComponent* armature = mesh.IsSkinned() ? scene.armatures.GetComponent(mesh.armatureID) : nullptr;
+
+				int subsetCounter = 0;
+				int count = 0;
+				int target_lod = 0;
+
+				if (bRaycastLowestLOD)
+					target_lod = mesh.lodlevels;
+
+				for (auto& subset : mesh.subsets)
+				{
+					if (count++ != target_lod) //PE: Always uselowest lod.
+						continue;
+
+					float temp_closest_distance = result.distance;
+					bool bEarlyExit = false;
+					if (subset.subAABBactive && subset.usedAABB > 0)
+					{
+						for (size_t j = 0; j < subset.usedAABB; ++j)
+						{
+							// Use the new localRay for the intersection test
+							if (subset.subAABB_index_count[j] > 0 && localRay.intersects(subset.subAABB[j]))
+							{
+								for (size_t i_sub = 0; i_sub + 2 < subset.subAABB_index_count[j]; i_sub += 3)
+								{
+									if (bEarlyExit)
+										break;
+									const uint32_t i0 = mesh.indices[subset.subAABB_index_offset[j] + i_sub + 0];
+									const uint32_t i1 = mesh.indices[subset.subAABB_index_offset[j] + i_sub + 1];
+									const uint32_t i2 = mesh.indices[subset.subAABB_index_offset[j] + i_sub + 2];
+									XMVECTOR p0, p1, p2;
+									if (armature == nullptr)
+									{
+										if (mesh.vertex_positions_morphed.empty())
+										{
+											p0 = XMLoadFloat3(&mesh.vertex_positions[i0]);
+											p1 = XMLoadFloat3(&mesh.vertex_positions[i1]);
+											p2 = XMLoadFloat3(&mesh.vertex_positions[i2]);
+										}
+										else
+										{
+											p0 = mesh.vertex_positions_morphed[i0].LoadPOS();
+											p1 = mesh.vertex_positions_morphed[i1].LoadPOS();
+											p2 = mesh.vertex_positions_morphed[i2].LoadPOS();
+										}
+									}
+									else
+									{
+										p0 = SkinVertex(mesh, *armature, i0);
+										p1 = SkinVertex(mesh, *armature, i1);
+										p2 = SkinVertex(mesh, *armature, i2);
+									}
+									float distance;
+									XMFLOAT2 bary;
+									if (wiMath::RayTriangleIntersects(rayOrigin_local, rayDirection_local, p0, p1, p2, distance, bary))
+									{
+										const XMVECTOR pos = XMVector3Transform(XMVectorAdd(rayOrigin_local, rayDirection_local * distance), objectMat);
+										distance = wiMath::Distance(pos, rayOrigin);
+										if (distance < temp_closest_distance)
+										{
+											const XMVECTOR nor = XMVector3Normalize(XMVector3TransformNormal(XMVector3Cross(XMVectorSubtract(p2, p1), XMVectorSubtract(p1, p0)), objectMat));
+#ifdef GGREDUCED
+											if (XMVectorGetX(XMVector3Dot(nor, rayDirection)) <= 0.0f || mesh.IsDoubleSided() == true)
+											{
+#endif
+												result.entity = entity;
+												XMStoreFloat3(&result.position, pos);
+												XMStoreFloat3(&result.normal, nor);
+												result.distance = distance;
+												result.subsetIndex = subsetCounter;
+												result.vertexID0 = (int)i0;
+												result.vertexID1 = (int)i1;
+												result.vertexID2 = (int)i2;
+												result.bary = bary;
+												temp_closest_distance = distance;
+												if (ray.bIgnoreNearestTriangle)
+													bEarlyExit = true;
+#ifdef GGREDUCED
+											}
+#endif
+										}
+									}
+								}
+							}
+						}
+					}
+					else
+					{
+						//PE: Fallback.
+						for (size_t i = 0; i < subset.indexCount; i += 3)
+						{
+							if (bEarlyExit)
+								break;
+							const uint32_t i0 = mesh.indices[subset.indexOffset + i + 0];
+							const uint32_t i1 = mesh.indices[subset.indexOffset + i + 1];
+							const uint32_t i2 = mesh.indices[subset.indexOffset + i + 2];
+
+							XMVECTOR p0;
+							XMVECTOR p1;
+							XMVECTOR p2;
+
+							{
+								if (armature == nullptr)
+								{
+									if (mesh.vertex_positions_morphed.empty())
+									{
+										p0 = XMLoadFloat3(&mesh.vertex_positions[i0]);
+										p1 = XMLoadFloat3(&mesh.vertex_positions[i1]);
+										p2 = XMLoadFloat3(&mesh.vertex_positions[i2]);
+									}
+									else
+									{
+										p0 = mesh.vertex_positions_morphed[i0].LoadPOS();
+										p1 = mesh.vertex_positions_morphed[i1].LoadPOS();
+										p2 = mesh.vertex_positions_morphed[i2].LoadPOS();
+									}
+								}
+								else
+								{
+									p0 = SkinVertex(mesh, *armature, i0);
+									p1 = SkinVertex(mesh, *armature, i1);
+									p2 = SkinVertex(mesh, *armature, i2);
+								}
+							}
+
+							float distance;
+							XMFLOAT2 bary;
+							if (wiMath::RayTriangleIntersects(rayOrigin_local, rayDirection_local, p0, p1, p2, distance, bary))
+							{
+								const XMVECTOR pos = XMVector3Transform(XMVectorAdd(rayOrigin_local, rayDirection_local * distance), objectMat);
+								distance = wiMath::Distance(pos, rayOrigin);
+
+								if (distance < result.distance)
+								{
+									const XMVECTOR nor = XMVector3Normalize(XMVector3TransformNormal(XMVector3Cross(XMVectorSubtract(p2, p1), XMVectorSubtract(p1, p0)), objectMat));
+#ifdef GGREDUCED
+									if (XMVectorGetX(XMVector3Dot(nor, rayDirection)) <= 0.0f || mesh.IsDoubleSided() == true)
+									{
+#endif
+										result.entity = entity;
+										XMStoreFloat3(&result.position, pos);
+										XMStoreFloat3(&result.normal, nor);
+										result.distance = distance;
+										result.subsetIndex = subsetCounter;
+										result.vertexID0 = (int)i0;
+										result.vertexID1 = (int)i1;
+										result.vertexID2 = (int)i2;
+										result.bary = bary;
+										if (ray.bIgnoreNearestTriangle)
+											bEarlyExit = true;
+
+#ifdef GGREDUCED
+									}
+#endif
+								}
+							}
+						}
+					}
+
+					subsetCounter++;
+				}
+
+			}
+		}
+
+		XMVECTOR N = XMLoadFloat3(&result.normal);
+		XMVECTOR P = XMLoadFloat3(&result.position);
+		XMVECTOR E = XMLoadFloat3(&ray.origin);
+		XMVECTOR T = XMVector3Normalize(XMVector3Cross(N, P - E));
+		XMVECTOR B = XMVector3Normalize(XMVector3Cross(T, N));
+		XMMATRIX M = { T, N, B, P };
+		XMStoreFloat4x4(&result.orientation, M);
+
+		return result;
+	}
+
+	PickResult Pick_OLD(const RAY& ray, uint32_t renderTypeMask, uint32_t layerMask, const Scene& scene)
 	{
 		PickResult result;
 
@@ -4691,15 +5334,15 @@ OPTICK_EVENT();
 							}
 							else
 							{
-								p0 = SkinVertex(mesh, *armature, i0);
-								p1 = SkinVertex(mesh, *armature, i1);
-								p2 = SkinVertex(mesh, *armature, i2);
+								p0 = SkinVertex_OLD(mesh, *armature, i0);
+								p1 = SkinVertex_OLD(mesh, *armature, i1);
+								p2 = SkinVertex_OLD(mesh, *armature, i2);
 							}
 						}
 
 						float distance;
 						XMFLOAT2 bary;
-						if (wiMath::RayTriangleIntersects(rayOrigin_local, rayDirection_local, p0, p1, p2, distance, bary))
+						if (wiMath::RayTriangleIntersects_OLD(rayOrigin_local, rayDirection_local, p0, p1, p2, distance, bary))
 						{
 							const XMVECTOR pos = XMVector3Transform(XMVectorAdd(rayOrigin_local, rayDirection_local*distance), objectMat);
 							distance = wiMath::Distance(pos, rayOrigin);

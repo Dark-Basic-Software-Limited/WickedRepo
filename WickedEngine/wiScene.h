@@ -20,6 +20,8 @@
 #include <vector>
 #include <memory>
 
+#define MAX_SUBAABB 16
+
 class wiArchive;
 
 namespace wiScene
@@ -360,6 +362,11 @@ namespace wiScene
 			// Non-serialized attributes:
 			uint32_t materialIndex = 0;
 			bool active = true;
+			bool subAABBactive = false;
+			uint32_t usedAABB = 0;
+			AABB subAABB[MAX_SUBAABB];
+			size_t subAABB_index_count[MAX_SUBAABB];
+			size_t subAABB_index_offset[MAX_SUBAABB];
 		};
 		std::vector<MeshSubset> subsets;
 
@@ -874,6 +881,7 @@ namespace wiScene
 			}
 		};
 		std::vector<ShaderBoneType> boneData;
+		std::vector<XMMATRIX> boneMatrices;
 		wiGraphics::GPUBuffer boneBuffer;
 
 		void CreateRenderData();
@@ -1018,9 +1026,10 @@ namespace wiScene
 		XMFLOAT4X4 inverseMatrix;
 		mutable bool render_dirty = false;
 		uint32_t userdata = 0;
-
+		float filterBrightness = 1.0f;
 		inline void SetDirty(bool value = true) { if (value) { _flags |= DIRTY; } else { _flags &= ~DIRTY; } }
 		inline void SetRealTime(bool value) { if (value) { _flags |= REALTIME; } else { _flags &= ~REALTIME; } }
+		inline void SetBrightness(float value) { filterBrightness = value; }
 
 		inline bool IsDirty() const { return _flags & DIRTY; }
 		inline bool IsRealTime() const { return _flags & REALTIME; }
@@ -1359,37 +1368,35 @@ namespace wiScene
 
 	struct Scene
 	{
-		wiECS::ComponentManager<NameComponent> names;
-		wiECS::ComponentManager<LayerComponent> layers;
-		wiECS::ComponentManager<TransformComponent> transforms;
-		wiECS::ComponentManager<PreviousFrameTransformComponent> prev_transforms;
-		wiECS::ComponentManager<HierarchyComponent> hierarchy;
-		wiECS::ComponentManager<MaterialComponent> materials;
-		wiECS::ComponentManager<MeshComponent> meshes;
-		wiECS::ComponentManager<ImpostorComponent> impostors;
-		wiECS::ComponentManager<ObjectComponent> objects;
-		wiECS::ComponentManager<AABB> aabb_objects;
-		wiECS::ComponentManager<RigidBodyPhysicsComponent> rigidbodies;
-//#ifndef GGREDUCED //PE: Remove all physics checks, we dont use it.
-		wiECS::ComponentManager<SoftBodyPhysicsComponent> softbodies;
-//#endif
-		wiECS::ComponentManager<ArmatureComponent> armatures;
-		wiECS::ComponentManager<LightComponent> lights;
-		wiECS::ComponentManager<AABB> aabb_lights;
-		wiECS::ComponentManager<CameraComponent> cameras;
-		wiECS::ComponentManager<EnvironmentProbeComponent> probes;
-		wiECS::ComponentManager<AABB> aabb_probes;
-		wiECS::ComponentManager<ForceFieldComponent> forces;
-		wiECS::ComponentManager<DecalComponent> decals;
-		wiECS::ComponentManager<AABB> aabb_decals;
-		wiECS::ComponentManager<AnimationComponent> animations;
-		wiECS::ComponentManager<AnimationDataComponent> animation_datas;
-		wiECS::ComponentManager<wiEmittedParticle> emitters;
-		wiECS::ComponentManager<wiHairParticle> hairs;
-		wiECS::ComponentManager<WeatherComponent> weathers;
-		wiECS::ComponentManager<SoundComponent> sounds;
-		wiECS::ComponentManager<InverseKinematicsComponent> inverse_kinematics;
-		wiECS::ComponentManager<SpringComponent> springs;
+		wiECS::ComponentManager<NameComponent> names{ 5000 };
+		wiECS::ComponentManager<LayerComponent> layers{ 5000 };
+		wiECS::ComponentManager<TransformComponent> transforms{ 5000 };
+		wiECS::ComponentManager<PreviousFrameTransformComponent> prev_transforms{ 5000 };
+		wiECS::ComponentManager<HierarchyComponent> hierarchy{ 5000 };
+		wiECS::ComponentManager<MaterialComponent> materials{ 3000 };
+		wiECS::ComponentManager<MeshComponent> meshes{ 1000 };
+		wiECS::ComponentManager<ImpostorComponent> impostors{ 1 };
+		wiECS::ComponentManager<ObjectComponent> objects{ 1000 };
+		wiECS::ComponentManager<AABB> aabb_objects{ 1000 };
+		wiECS::ComponentManager<RigidBodyPhysicsComponent> rigidbodies{ 1 };
+		wiECS::ComponentManager<SoftBodyPhysicsComponent> softbodies{ 1 };
+		wiECS::ComponentManager<ArmatureComponent> armatures{ 500 };
+		wiECS::ComponentManager<LightComponent> lights{ 500 };
+		wiECS::ComponentManager<AABB> aabb_lights{ 500 };
+		wiECS::ComponentManager<CameraComponent> cameras{ 10 };
+		wiECS::ComponentManager<EnvironmentProbeComponent> probes{ 100 };
+		wiECS::ComponentManager<AABB> aabb_probes{ 100 };
+		wiECS::ComponentManager<ForceFieldComponent> forces{ 1 };
+		wiECS::ComponentManager<DecalComponent> decals{ 1 };
+		wiECS::ComponentManager<AABB> aabb_decals{ 1 };
+		wiECS::ComponentManager<AnimationComponent> animations{ 500 };
+		wiECS::ComponentManager<AnimationDataComponent> animation_datas{ 3000 };
+		wiECS::ComponentManager<wiEmittedParticle> emitters{ 500 };
+		wiECS::ComponentManager<wiHairParticle> hairs{ 1 };
+		wiECS::ComponentManager<WeatherComponent> weathers{ 10 };
+		wiECS::ComponentManager<SoundComponent> sounds{ 100 };
+		wiECS::ComponentManager<InverseKinematicsComponent> inverse_kinematics{ 1 };
+		wiECS::ComponentManager<SpringComponent> springs{ 1 };
 
 		// Non-serialized attributes:
 		float dt = 0;
@@ -1580,6 +1587,7 @@ namespace wiScene
 	// Returns skinned vertex position in armature local space
 	//	N : normal (out, optional)
 	XMVECTOR SkinVertex(const MeshComponent& mesh, const ArmatureComponent& armature, uint32_t index, XMVECTOR* N = nullptr);
+	XMVECTOR SkinVertex_OLD(const MeshComponent& mesh, const ArmatureComponent& armature, uint32_t index, XMVECTOR* N = nullptr);
 
 
 	// Helper that manages a global scene
@@ -1637,6 +1645,8 @@ namespace wiScene
 	//	layerMask		:	filter based on layer
 	//	scene			:	the scene that will be traced against the ray
 	PickResult Pick(const RAY& ray, uint32_t renderTypeMask = RENDERTYPE_OPAQUE, uint32_t layerMask = ~0, const Scene& scene = GetScene());
+	PickResult PickThread(const RAY& ray, uint32_t renderTypeMask = RENDERTYPE_OPAQUE, uint32_t layerMask = ~0, const Scene& scene = GetScene());
+	PickResult Pick_OLD(const RAY& ray, uint32_t renderTypeMask = RENDERTYPE_OPAQUE, uint32_t layerMask = ~0, const Scene& scene = GetScene());
 
 	struct SceneIntersectSphereResult
 	{

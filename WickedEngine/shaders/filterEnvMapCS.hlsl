@@ -40,6 +40,8 @@ void main(uint3 DTid : SV_DispatchThreadID)
 		}
 		col /= (float)filterRayCount;
 
+		col.rgb *= filterBrightness;
+		
 		output[uint3(DTid.xy, DTid.z + filterArrayIndex * 6)] = col;
 	}
 }

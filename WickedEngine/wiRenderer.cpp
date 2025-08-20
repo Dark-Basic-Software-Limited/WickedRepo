@@ -37,6 +37,7 @@
 #endif
 #endif
 
+#define REMOVE_DEBUGUAV
 #define ENABLE_TRANSPARENT_SHADOWS
 #define DELAYEDSHADOWS //PE: sometimes (rare) one cascade display all black, think i need to use the same shcam everywhere ?
 #ifdef SHADERCOMPILER
@@ -299,6 +300,7 @@ std::vector<PaintRadius> paintrads;
 
 wiSpinLock deferredMIPGenLock;
 std::vector<std::pair<std::shared_ptr<wiResource>, bool>> deferredMIPGens;
+wiSpinLock particleLock;
 
 
 bool volumetric_clouds_precomputed = false;
@@ -2993,6 +2995,16 @@ void Initialize()
 	SetShadowPropsCube(SHADOWRES_CUBE, SHADOWCOUNT_CUBE);
 	SetShadowPropsSpot2D(SHADOWRES_SPOT_2D, SHADOWCOUNT_SPOT_2D);
 
+	static uint32_t maxerrors = 1;
+	void timestampactivity(int i, char* desc_s);
+	if (maxerrors > 0)
+	{
+		maxerrors--;
+		char debug[MAX_PATH];
+		sprintf(debug, "wiRenderer Initialized");
+		timestampactivity(0, debug);
+	}
+
 	wiBackLog::post("wiRenderer Initialized");
 }
 void ClearWorld(Scene& scene)
@@ -3298,6 +3310,8 @@ void RenderMeshes(
 		if (renderPass == RENDERPASS_MAIN && renderTypeFlags & RENDERTYPE_TRANSPARENT)
 		{
 			GPUParticles::gpup_draw_bydistance(wiScene::GetCamera(), cmd, 0.0f);
+			//wiRenderer::DrawSoftParticles_Distance(vis, false, cmd, 0.0f);
+
 			// repair constant buffers changed by particle shader
 			//BindCommonResources(cmd);
 			BindConstantBuffers(VS, cmd);
@@ -3530,9 +3544,12 @@ void RenderMeshes(
 						float fDistanceFromCamera = (float)instancedBatch.paddingnickedfordistance;
 						//float distance = wiMath::Distance(instancedBatch.aabb.getCenter(), vis.camera->Eye); // aabb empty :(
 						GPUParticles::gpup_draw_bydistance(wiScene::GetCamera(), cmd, fDistanceFromCamera);
+
 						//BindCommonResources(cmd);
 						BindConstantBuffers(VS, cmd);
 						BindConstantBuffers(PS, cmd);
+
+						wiRenderer::DrawSoftParticles_Distance(vis, false, cmd, fDistanceFromCamera);
 					}
 				}
 #endif
@@ -3916,6 +3933,7 @@ void RenderMeshes(
 		device->EventEnd(cmd);
 }
 
+#ifndef GGREDUCED
 void RenderImpostors(
 	const Visibility& vis,
 	RENDERPASS renderPass, 
@@ -3991,6 +4009,7 @@ void RenderImpostors(
 		device->EventEnd(cmd);
 	}
 }
+#endif
 
 void ProcessDeferredMipGenRequests(CommandList cmd)
 {
@@ -4350,7 +4369,7 @@ void UpdateVisibility(Visibility& vis, float maxApparentSize)
 			}
 			});
 	}
-
+#ifndef GGREDUCED
 	if (vis.flags & Visibility::ALLOW_HAIRS)
 	{
 		wiJobSystem::Execute(ctx, [&](wiJobArgs args) {
@@ -4370,6 +4389,7 @@ void UpdateVisibility(Visibility& vis, float maxApparentSize)
 			}
 			});
 	}
+#endif
 
 	if (vis.flags & Visibility::ALLOW_LIGHTS)
 	{
@@ -5545,6 +5565,7 @@ void UpdateRenderData(
 		wiProfiler::EndRange(range);
 	}
 
+#ifndef GGREDUCED
 	// Hair particle systems GPU simulation:
 	if (!vis.visibleHairs.empty())
 	{
@@ -5564,6 +5585,7 @@ void UpdateRenderData(
 		}
 		wiProfiler::EndRange(range);
 	}
+#endif
 
 	// Compute water simulation:
 	if (vis.scene->weather.IsOceanEnabled())
@@ -6045,6 +6067,148 @@ void DrawWaterRipples(const Visibility& vis, CommandList cmd)
 	device->EventEnd(cmd);
 }
 
+uint32_t emitterSortingHashes[8192];
+bool emitterUsed[8192] = { false };
+size_t emitterCount = 0;
+size_t emitterCountStart = 0;
+uint8_t cmdStart = 0;
+uint32_t currentemitter = 0;
+wiProfiler::range_id range_particle = 0;
+Texture linearparticledepth;
+
+void DrawSoftParticles_Done(
+	const Visibility& vis,
+	const Texture& lineardepth,
+	bool distortion,
+	CommandList cmd
+)
+{
+	if (emitterCount == 0)
+	{
+		return;
+	}
+	if(range_particle != 0)
+		wiProfiler::EndRange(range_particle);
+}
+
+void DrawSoftParticles_Init(
+	const Visibility& vis,
+	const Texture& lineardepth,
+	bool distortion,
+	CommandList cmd
+)
+{
+	emitterCountStart = emitterCount = vis.visibleEmitters.size();
+	cmdStart = cmd;
+	if (emitterCount == 0)
+	{
+		return;
+	}
+
+	linearparticledepth = (Texture) lineardepth;
+
+	if (emitterCount > 4095) //PE: MAX emitters.
+		emitterCount = 4095;
+
+	assert(emitterCount < 0x00000FFF); // watch out for sorting hash truncation!
+
+	for (size_t i = 0; i < emitterCount; ++i)
+	{
+		emitterUsed[i] = false;
+		const uint32_t emitterIndex = vis.visibleEmitters[i];
+		const wiEmittedParticle& emitter = vis.scene->emitters[emitterIndex];
+		float distance = wiMath::DistanceEstimated(emitter.center, vis.camera->Eye) + emitter.distance_sort_bias;
+		if (distance < 0)
+		{
+			if (emitter.distance_sort_bias < 0)
+				distance = 0;
+			else
+				distance = 1;
+		}
+		emitterSortingHashes[i] = 0;
+		emitterSortingHashes[i] |= (uint32_t)i & 0x00000FFF;
+		emitterSortingHashes[i] |= ((uint32_t)(distance * 2.0f) & 0x000FFFFF) << 12;
+	}
+	std::sort(emitterSortingHashes, emitterSortingHashes + emitterCount, std::greater<uint32_t>());
+	currentemitter = 0;
+	range_particle = 0;
+
+#ifdef GGREDUCED
+	range_particle = distortion ?
+		wiProfiler::BeginRangeGPU("WParticles Emitted - Render (Distortion)", cmd) :
+		wiProfiler::BeginRangeGPU("WParticles Emitted - Render", cmd);
+#else
+	range_particle = distortion ?
+		wiProfiler::BeginRangeGPU("EmittedParticles - Render (Distortion)", cmd) :
+		wiProfiler::BeginRangeGPU("EmittedParticles - Render", cmd);
+#endif
+}
+
+void DrawSoftParticles_Distance(
+	const Visibility& vis,
+	bool distortion,
+	CommandList cmd,
+	float distance
+)
+{
+	if (emitterCount == 0 || cmdStart != cmd)
+	{
+		return;
+	}
+
+	particleLock.lock();
+
+	if (emitterCount > 4095) //PE: MAX emitters.
+		emitterCount = 4095;
+
+	int iLoopStart = currentemitter;
+	if (distance == 0) //PE: Render all notused.
+		iLoopStart = 0;
+	bool bRenderStarted = false;
+	for (size_t i = iLoopStart; i < emitterCount; ++i)
+	{
+		if (emitterUsed[i]) continue;
+		float dist = (float) ((uint32_t) (emitterSortingHashes[i] & 0xFFFFF000) >> 12) * 0.5f;
+		if (dist > distance || distance == 0)
+		{
+			//PE: Draw it.
+			currentemitter = i + 1;
+		}
+		else
+		{
+			//PE: Skip.
+			particleLock.unlock();
+			return;
+		}
+		if (!bRenderStarted)
+		{
+			//PE: repair constant buffers changed by particle shader gpup_draw_bydistance
+			//BindCommonResources(cmd);
+			BindConstantBuffers(VS, cmd);
+			BindConstantBuffers(PS, cmd);
+			device->BindResource(PS, &linearparticledepth, TEXSLOT_LINEARDEPTH, cmd);
+			bRenderStarted = true;
+		}
+		const uint32_t emitterIndex = vis.visibleEmitters[emitterSortingHashes[i] & 0x00000FFF];
+		const wiEmittedParticle& emitter = vis.scene->emitters[emitterIndex];
+		const Entity entity = vis.scene->emitters.GetEntity(emitterIndex);
+		const MaterialComponent& material = *vis.scene->materials.GetComponent(entity);
+
+		if (distortion && emitter.shaderType == wiEmittedParticle::SOFT_DISTORTION)
+		{
+			emitterUsed[i] = true;
+			emitter.Draw(*vis.camera, material, cmd);
+		}
+		else if (!distortion && (emitter.shaderType == wiEmittedParticle::SOFT || emitter.shaderType == wiEmittedParticle::SOFT_LIGHTING || emitter.shaderType == wiEmittedParticle::SIMPLE || IsWireRender()))
+		{
+			emitterUsed[i] = true;
+			emitter.Draw(*vis.camera, material, cmd);
+		}
+
+	}
+	particleLock.unlock();
+
+}
 
 
 void DrawSoftParticles(
@@ -6119,6 +6283,7 @@ void DrawSoftParticles(
 
 	wiProfiler::EndRange(range);
 }
+
 void DrawLightVisualizers(
 	const Visibility& vis,
 	CommandList cmd
@@ -6398,19 +6563,25 @@ void SetShadowProps2D(int resolution, int count)
 		desc.MiscFlags = 0;
 
 		desc.BindFlags = BIND_DEPTH_STENCIL | BIND_SHADER_RESOURCE;
+
+		//HIGH - FORMAT_R32_TYPELESS MEDIUM LOW - FORMAT_R16_TYPELESS
+		//HIGT FORMAT_R16G16B16A16_FLOAT - MEDIUM FORMAT_R8G8B8A8_UNORM - LOW FORMAT_R4G4B4A4_UNORM
+
 		desc.Format = FORMAT_R32_TYPELESS;
 		desc.layout = IMAGE_LAYOUT_SHADER_RESOURCE;
 		device->CreateTexture(&desc, nullptr, &shadowMapArray_2D);
 
 #ifdef ENABLE_TRANSPARENT_SHADOWS
+		desc.BindFlags = BIND_RENDER_TARGET | BIND_SHADER_RESOURCE;
+		desc.Format = FORMAT_R16G16B16A16_FLOAT;
 		if (!GetTransparentShadowsEnabled())
 		{
 			//PE: To actual release a old we need to setup a new, so just use a small size RTV.
 			desc.Width = 16;
 			desc.Height = 16;
+			desc.Format = FORMAT_R8G8B8A8_UNORM;
 		}
-		desc.BindFlags = BIND_RENDER_TARGET | BIND_SHADER_RESOURCE;
-		desc.Format = FORMAT_R16G16B16A16_FLOAT;
+
 		desc.layout = IMAGE_LAYOUT_SHADER_RESOURCE;
 		desc.clear.color[0] = 1;
 		desc.clear.color[1] = 1;
@@ -6496,18 +6667,23 @@ void SetShadowPropsSpot2D(int resolution, int count)
 		desc.MiscFlags = 0;
 
 		desc.BindFlags = BIND_DEPTH_STENCIL | BIND_SHADER_RESOURCE;
+
+		//HIGH - FORMAT_R32_TYPELESS MEDIUM LOW - FORMAT_R16_TYPELESS
+		//HIGT FORMAT_R16G16B16A16_FLOAT - MEDIUM FORMAT_R8G8B8A8_UNORM - LOW FORMAT_R4G4B4A4_UNORM
+
 		desc.Format = FORMAT_R32_TYPELESS;
 		desc.layout = IMAGE_LAYOUT_SHADER_RESOURCE;
 		device->CreateTexture(&desc, nullptr, &shadowMapArray_Spot_2D);
 
 #ifdef ENABLE_TRANSPARENT_SHADOWS
+		desc.BindFlags = BIND_RENDER_TARGET | BIND_SHADER_RESOURCE;
+		desc.Format = FORMAT_R16G16B16A16_FLOAT;
 		if (!GetTransparentShadowsEnabled())
 		{
 			desc.Width = 16;
 			desc.Height = 16;
+			desc.Format = FORMAT_R8G8B8A8_UNORM;
 		}
-		desc.BindFlags = BIND_RENDER_TARGET | BIND_SHADER_RESOURCE;
-		desc.Format = FORMAT_R16G16B16A16_FLOAT;
 		desc.layout = IMAGE_LAYOUT_SHADER_RESOURCE;
 		desc.clear.color[0] = 1;
 		desc.clear.color[1] = 1;
@@ -6592,18 +6768,22 @@ void SetShadowPropsCube(int resolution, int count)
 		desc.MiscFlags = RESOURCE_MISC_TEXTURECUBE;
 
 		desc.BindFlags = BIND_DEPTH_STENCIL | BIND_SHADER_RESOURCE;
+		//HIGH - FORMAT_R32_TYPELESS MEDIUM LOW - FORMAT_R16_TYPELESS
 		desc.Format = FORMAT_R32_TYPELESS;//LB: fixes issue of point light shadow gap and tearing (more mem yes but higher quality, maybe on a flag?) -  FORMAT_R16_TYPELESS; //PE: Test FORMAT_R32_TYPELESS;
 		desc.layout = IMAGE_LAYOUT_SHADER_RESOURCE;
 		device->CreateTexture(&desc, nullptr, &shadowMapArray_Cube);
 
+
+		//HIGT FORMAT_R16G16B16A16_FLOAT - MEDIUM FORMAT_R8G8B8A8_UNORM - LOW FORMAT_R4G4B4A4_UNORM
 #ifdef ENABLE_TRANSPARENT_SHADOWS
+		desc.BindFlags = BIND_RENDER_TARGET | BIND_SHADER_RESOURCE;
+		desc.Format = FORMAT_R16G16B16A16_FLOAT;
 		if (!GetTransparentShadowsEnabled())
 		{
 			desc.Width = 16;
 			desc.Height = 16;
+			desc.Format = FORMAT_R8G8B8A8_UNORM;
 		}
-		desc.BindFlags = BIND_RENDER_TARGET | BIND_SHADER_RESOURCE;
-		desc.Format = FORMAT_R16G16B16A16_FLOAT;
 		desc.layout = IMAGE_LAYOUT_SHADER_RESOURCE;
 		desc.clear.color[0] = 1;
 		desc.clear.color[1] = 1;
@@ -7217,7 +7397,7 @@ void DrawScene(
 		vis.scene->ocean.Render(*vis.camera, vis.scene->weather.oceanParameters, cmd);
 	}
 #endif
-
+#ifndef GGREDUCED
 	if (hairparticle)
 	{
 		if (!transparent)
@@ -7232,11 +7412,12 @@ void DrawScene(
 			}
 		}
 	}
-
+#endif
 	if (IsWireRender() && !transparent)
 		return;
-
+#ifndef GGREDUCED
 	RenderImpostors(vis, renderPass, cmd);
+#endif
 
 	uint32_t renderTypeFlags = 0;
 	if (opaque)
@@ -8906,6 +9087,7 @@ void RefreshEnvProbes(const Visibility& vis, CommandList cmd)
 				cb.filterArrayIndex = arrayIndex;
 				cb.filterRoughness = (float)i / (float)desc.MipLevels;
 				cb.filterRayCount = 128;
+				cb.filterBrightness = probe.filterBrightness;
 				device->UpdateBuffer(&constantBuffers[CBTYPE_FILTERENVMAP], &cb, cmd);
 				device->BindConstantBuffer(CS, &constantBuffers[CBTYPE_FILTERENVMAP], CB_GETBINDSLOT(FilterEnvmapCB), cmd);
 
@@ -8965,7 +9147,7 @@ void RefreshEnvProbes(const Visibility& vis, CommandList cmd)
 	//wiProfiler::EndRange(range);
 	device->EventEnd(cmd); // EnvironmentProbe Refresh
 }
-
+#ifndef GGREDUCED
 void RefreshImpostors(const Scene& scene, CommandList cmd)
 {
 	if (!scene.impostorArray.IsValid())
@@ -9131,6 +9313,7 @@ void RefreshImpostors(const Scene& scene, CommandList cmd)
 
 	device->EventEnd(cmd);
 }
+#endif
 
 void VoxelRadiance(const Visibility& vis, CommandList cmd)
 {
@@ -9357,13 +9540,14 @@ void ComputeTiledLightCulling(
 		device->EventBegin("Entity Culling", cmd);
 
 		device->BindResource(CS, &res.tileFrustums, TEXSLOT_ONDEMAND0, cmd);
-
+#ifndef REMOVE_DEBUGUAV
 		if (GetDebugLightCulling() && debugUAV.IsValid())
 		{
 			device->BindComputeShader(&shaders[GetAdvancedLightCulling() ? CSTYPE_LIGHTCULLING_ADVANCED_DEBUG : CSTYPE_LIGHTCULLING_DEBUG], cmd);
 			device->BindUAV(CS, &debugUAV, 3, cmd);
 		}
 		else
+#endif
 		{
 			device->BindComputeShader(&shaders[GetAdvancedLightCulling() ? CSTYPE_LIGHTCULLING_ADVANCED : CSTYPE_LIGHTCULLING], cmd);
 		}
@@ -10224,7 +10408,7 @@ void ComputeShadingRateClassification(
 {
 	device->EventBegin("ComputeShadingRateClassification", cmd);
 	auto range = wiProfiler::BeginRangeGPU("ComputeShadingRateClassification", cmd);
-
+#ifndef REMOVE_DEBUGUAV
 	if (GetVariableRateShadingClassificationDebug())
 	{
 		device->BindUAV(CS, &debugUAV, 1, cmd);
@@ -10239,6 +10423,7 @@ void ComputeShadingRateClassification(
 		device->BindComputeShader(&shaders[CSTYPE_SHADINGRATECLASSIFICATION_DEBUG], cmd);
 	}
 	else
+#endif
 	{
 		device->BindComputeShader(&shaders[CSTYPE_SHADINGRATECLASSIFICATION], cmd);
 	}
@@ -10282,7 +10467,7 @@ void ComputeShadingRateClassification(
 		};
 		device->Barrier(barriers, arraysize(barriers), cmd);
 	}
-
+#ifndef REMOVE_DEBUGUAV
 	if (GetVariableRateShadingClassificationDebug())
 	{
 		{
@@ -10292,6 +10477,7 @@ void ComputeShadingRateClassification(
 			device->Barrier(barriers, arraysize(barriers), cmd);
 		}
 	}
+#endif
 
 	device->UnbindUAVs(0, arraysize(uavs), cmd);
 

@@ -15,6 +15,7 @@ extern float maxApparentSize; // = 0.000002f;
 wiSpinLock bindresourcesLock;
 
 //#define REMOVE_WICKED_PARTICLE
+#define REMOVE_DEBUGUAV
 #define REMOVE_WATER_RIPPLE
 #define REMOVE_TEMPORAL_AA
 #define REMOVE_RAY_TRACED_SHADOW
@@ -90,6 +91,176 @@ namespace Tracers
 }
 
 #endif
+
+void RenderPath3D::CheckUsedTextures()
+{
+	static int current_getVolumeLightsEnabled = -1;
+	if (current_getVolumeLightsEnabled != getVolumeLightsEnabled())
+	{
+		GraphicsDevice* device = wiRenderer::GetDevice();
+		current_getVolumeLightsEnabled = getVolumeLightsEnabled();
+		TextureDesc desc;
+		desc.BindFlags = BIND_RENDER_TARGET | BIND_SHADER_RESOURCE | BIND_UNORDERED_ACCESS;
+		XMUINT2 internalResolution;
+		internalResolution.x = GetWidth3D();
+		internalResolution.y = GetHeight3D();
+		if (getVolumeLightsEnabled())
+		{
+			desc.Format = FORMAT_R16G16B16A16_FLOAT;
+			desc.Width = internalResolution.x / 4;
+			desc.Height = internalResolution.y / 4;
+		}
+		else
+		{
+			desc.Format = FORMAT_R8G8B8A8_UNORM;
+			desc.Width = 4;
+			desc.Height = 4;
+		}
+		device->CreateTexture(&desc, nullptr, &rtVolumetricLights[0]);
+		device->SetName(&rtVolumetricLights[0], "rtVolumetricLights[0]");
+		device->CreateTexture(&desc, nullptr, &rtVolumetricLights[1]);
+		device->SetName(&rtVolumetricLights[1], "rtVolumetricLights[1]");
+		{
+			RenderPassDesc desc;
+			desc.attachments.push_back(RenderPassAttachment::RenderTarget(&rtVolumetricLights[0], RenderPassAttachment::LOADOP_CLEAR));
+
+			device->CreateRenderPass(&desc, &renderpass_volumetriclight);
+		}
+
+	}
+
+	static int current_getDepthOfFieldEnabled = -1;
+	if (current_getDepthOfFieldEnabled != getDepthOfFieldEnabled())
+	{
+		GraphicsDevice* device = wiRenderer::GetDevice();
+		current_getDepthOfFieldEnabled = getDepthOfFieldEnabled();
+		if(getDepthOfFieldEnabled())
+		{
+			XMUINT2 internalResolution;
+			internalResolution.x = GetWidth3D();
+			internalResolution.y = GetHeight3D();
+			wiRenderer::CreateDepthOfFieldResources(depthoffieldResources, internalResolution);
+		}
+		else
+		{
+			XMUINT2 internalResolution;
+			internalResolution.x = 32;
+			internalResolution.y = 32;
+			wiRenderer::CreateDepthOfFieldResources(depthoffieldResources, internalResolution);
+		}
+	}
+
+	static int current_getMotionBlurEnabled = -1;
+	if (current_getMotionBlurEnabled != getMotionBlurEnabled())
+	{
+		GraphicsDevice* device = wiRenderer::GetDevice();
+		current_getMotionBlurEnabled = getMotionBlurEnabled();
+		if (getMotionBlurEnabled())
+		{
+			XMUINT2 internalResolution;
+			internalResolution.x = GetWidth3D();
+			internalResolution.y = GetHeight3D();
+			wiRenderer::CreateMotionBlurResources(motionblurResources, internalResolution);
+		}
+		else
+		{
+			XMUINT2 internalResolution;
+			internalResolution.x = 32;
+			internalResolution.y = 32;
+			wiRenderer::CreateMotionBlurResources(motionblurResources, internalResolution);
+		}
+	}
+
+	static int current_hdr1 = -1;
+
+	if(current_hdr1 != getMotionBlurEnabled() || getDepthOfFieldEnabled())
+	{
+		GraphicsDevice* device = wiRenderer::GetDevice();
+		current_hdr1 = getMotionBlurEnabled() || getDepthOfFieldEnabled();
+		if (getMotionBlurEnabled() || getDepthOfFieldEnabled())
+		{
+			XMUINT2 internalResolution;
+			internalResolution.x = GetWidth3D();
+			internalResolution.y = GetHeight3D();
+
+			TextureDesc desc;
+			desc.BindFlags = BIND_RENDER_TARGET | BIND_SHADER_RESOURCE | BIND_UNORDERED_ACCESS;
+			desc.Format = FORMAT_R11G11B10_FLOAT;
+			desc.Width = internalResolution.x;
+			desc.Height = internalResolution.y;
+			device->CreateTexture(&desc, nullptr, &rtPostprocess_HDR[1]);
+			device->SetName(&rtPostprocess_HDR[1], "rtPostprocess_HDR[1]");
+		}
+		else
+		{
+			TextureDesc desc;
+			desc.BindFlags = BIND_RENDER_TARGET | BIND_SHADER_RESOURCE | BIND_UNORDERED_ACCESS;
+			desc.Format = FORMAT_R11G11B10_FLOAT;
+			desc.Width = 4;
+			desc.Height = 4;
+			device->CreateTexture(&desc, nullptr, &rtPostprocess_HDR[1]);
+			device->SetName(&rtPostprocess_HDR[1], "rtPostprocess_HDR[1]");
+		}
+	}
+
+	static int current_getReflectionsEnabled = -1;
+	if( current_getReflectionsEnabled != getReflectionsEnabled())
+	{
+		GraphicsDevice* device = wiRenderer::GetDevice();
+		current_getReflectionsEnabled = getReflectionsEnabled();
+		if (getReflectionsEnabled())
+		{
+			XMUINT2 internalResolution;
+			internalResolution.x = GetWidth3D();
+			internalResolution.y = GetHeight3D();
+			TextureDesc desc;
+			desc.BindFlags = BIND_RENDER_TARGET | BIND_SHADER_RESOURCE;
+			desc.Format = FORMAT_R11G11B10_FLOAT;
+			desc.Width = internalResolution.x / 2;
+			desc.Height = internalResolution.y / 2;
+			device->CreateTexture(&desc, nullptr, &rtReflection);
+			device->SetName(&rtReflection, "rtReflection");
+		}
+		else
+		{
+			TextureDesc desc;
+			desc.BindFlags = BIND_RENDER_TARGET | BIND_SHADER_RESOURCE;
+			desc.Format = FORMAT_R11G11B10_FLOAT;
+			desc.Width = 4;
+			desc.Height = 4;
+			device->CreateTexture(&desc, nullptr, &rtReflection);
+			device->SetName(&rtReflection, "rtReflection");
+		}
+		{
+			RenderPassDesc desc;
+			desc.attachments.push_back(
+				RenderPassAttachment::RenderTarget(
+					&rtReflection,
+					RenderPassAttachment::LOADOP_DONTCARE,
+					RenderPassAttachment::STOREOP_STORE,
+					IMAGE_LAYOUT_SHADER_RESOURCE,
+					IMAGE_LAYOUT_RENDERTARGET,
+					IMAGE_LAYOUT_SHADER_RESOURCE
+				)
+			);
+			desc.attachments.push_back(
+				RenderPassAttachment::DepthStencil(
+					&depthBuffer_Reflection,
+					RenderPassAttachment::LOADOP_LOAD,
+					RenderPassAttachment::STOREOP_DONTCARE,
+					IMAGE_LAYOUT_SHADER_RESOURCE,
+					IMAGE_LAYOUT_DEPTHSTENCIL_READONLY,
+					IMAGE_LAYOUT_DEPTHSTENCIL_READONLY
+				)
+			);
+
+			device->CreateRenderPass(&desc, &renderpass_reflection);
+		}
+
+	}
+
+
+}
 
 void RenderPath3D::ResizeBuffers()
 {
@@ -170,17 +341,18 @@ void RenderPath3D::ResizeBuffers()
 	}
 #endif
 
-	{
-		TextureDesc desc;
-		desc.Format = FORMAT_R16G16B16A16_FLOAT;
-		desc.BindFlags = BIND_RENDER_TARGET | BIND_SHADER_RESOURCE | BIND_UNORDERED_ACCESS;
-		desc.Width = internalResolution.x / 4;
-		desc.Height = internalResolution.y / 4;
-		device->CreateTexture(&desc, nullptr, &rtVolumetricLights[0]);
-		device->SetName(&rtVolumetricLights[0], "rtVolumetricLights[0]");
-		device->CreateTexture(&desc, nullptr, &rtVolumetricLights[1]);
-		device->SetName(&rtVolumetricLights[1], "rtVolumetricLights[1]");
-	}
+//PE: MOVED
+//	{
+//		TextureDesc desc;
+//		desc.Format = FORMAT_R16G16B16A16_FLOAT;
+//		desc.BindFlags = BIND_RENDER_TARGET | BIND_SHADER_RESOURCE | BIND_UNORDERED_ACCESS;
+//		desc.Width = internalResolution.x / 4;
+//		desc.Height = internalResolution.y / 4;
+//		device->CreateTexture(&desc, nullptr, &rtVolumetricLights[0]);
+//		device->SetName(&rtVolumetricLights[0], "rtVolumetricLights[0]");
+//		device->CreateTexture(&desc, nullptr, &rtVolumetricLights[1]);
+//		device->SetName(&rtVolumetricLights[1], "rtVolumetricLights[1]");
+//	}
 #ifndef REMOVE_WATER_RIPPLE
 	{
 		TextureDesc desc;
@@ -218,15 +390,17 @@ void RenderPath3D::ResizeBuffers()
 			assert(subresource_index == i);
 		}
 	}
-	{
-		TextureDesc desc;
-		desc.BindFlags = BIND_RENDER_TARGET | BIND_SHADER_RESOURCE;
-		desc.Format = FORMAT_R11G11B10_FLOAT;
-		desc.Width = internalResolution.x / 2;
-		desc.Height = internalResolution.y / 2;
-		device->CreateTexture(&desc, nullptr, &rtReflection);
-		device->SetName(&rtReflection, "rtReflection");
-	}
+	//PE: MOVED
+	//{
+	//	TextureDesc desc;
+	//	desc.BindFlags = BIND_RENDER_TARGET | BIND_SHADER_RESOURCE;
+	//	desc.Format = FORMAT_R11G11B10_FLOAT;
+	//	desc.Width = internalResolution.x / 2;
+	//	desc.Height = internalResolution.y / 2;
+	//	device->CreateTexture(&desc, nullptr, &rtReflection);
+	//	device->SetName(&rtReflection, "rtReflection");
+	//}
+
 #ifndef REMOVE_RAY_TRACED_SHADOW
 	{
 		TextureDesc desc;
@@ -286,8 +460,10 @@ void RenderPath3D::ResizeBuffers()
 		desc.Height = internalResolution.y;
 		device->CreateTexture(&desc, nullptr, &rtPostprocess_HDR[0]);
 		device->SetName(&rtPostprocess_HDR[0], "rtPostprocess_HDR[0]");
-		device->CreateTexture(&desc, nullptr, &rtPostprocess_HDR[1]);
-		device->SetName(&rtPostprocess_HDR[1], "rtPostprocess_HDR[1]");
+
+		//PE: Moved
+		//device->CreateTexture(&desc, nullptr, &rtPostprocess_HDR[1]);
+		//device->SetName(&rtPostprocess_HDR[1], "rtPostprocess_HDR[1]");
 	}
 	{
 		TextureDesc desc;
@@ -300,6 +476,7 @@ void RenderPath3D::ResizeBuffers()
 		device->CreateTexture(&desc, nullptr, &rtPostprocess_LDR[1]);
 		device->SetName(&rtPostprocess_LDR[1], "rtPostprocess_LDR[1]");
 
+#ifndef GGREDUCED
 		desc.Width /= 4;
 		desc.Height /= 4;
 		desc.BindFlags = BIND_UNORDERED_ACCESS | BIND_SHADER_RESOURCE;
@@ -312,8 +489,9 @@ void RenderPath3D::ResizeBuffers()
 		device->SetName(&rtGUIBlurredBackground[1], "rtGUIBlurredBackground[1]");
 		device->CreateTexture(&desc, nullptr, &rtGUIBlurredBackground[2]);
 		device->SetName(&rtGUIBlurredBackground[2], "rtGUIBlurredBackground[2]");
+#endif
 	}
-
+#ifndef GGREDUCED
 	if(device->CheckCapability(GRAPHICSDEVICE_CAPABILITY_VARIABLE_RATE_SHADING_TIER2))
 	{
 		uint32_t tileSize = device->GetVariableRateShadingTileSize();
@@ -328,6 +506,7 @@ void RenderPath3D::ResizeBuffers()
 		device->CreateTexture(&desc, nullptr, &rtShadingRate);
 		device->SetName(&rtShadingRate, "rtShadingRate");
 	}
+#endif
 
 	// Depth buffers:
 	{
@@ -372,6 +551,7 @@ void RenderPath3D::ResizeBuffers()
 		desc.Width = internalResolution.x / 2;
 		desc.Height = internalResolution.y / 2;
 		desc.layout = IMAGE_LAYOUT_DEPTHSTENCIL_READONLY;
+		//PE: Also used for clouds
 		device->CreateTexture(&desc, nullptr, &depthBuffer_Reflection);
 		device->SetName(&depthBuffer_Reflection, "depthBuffer_Reflection");
 	}
@@ -435,11 +615,12 @@ void RenderPath3D::ResizeBuffers()
 			desc.attachments.push_back(RenderPassAttachment::Resolve(GetGbuffer_Read(GBUFFER_COLOR)));
 			desc.attachments.push_back(RenderPassAttachment::Resolve(GetGbuffer_Read(GBUFFER_NORMAL_ROUGHNESS)));
 		}
-
+#ifndef GGREDUCED
 		if (device->CheckCapability(GRAPHICSDEVICE_CAPABILITY_VARIABLE_RATE_SHADING_TIER2))
 		{
 			desc.attachments.push_back(RenderPassAttachment::ShadingRateSource(&rtShadingRate, IMAGE_LAYOUT_UNORDERED_ACCESS, IMAGE_LAYOUT_UNORDERED_ACCESS));
 		}
+#endif
 
 		device->CreateRenderPass(&desc, &renderpass_main);
 	}
@@ -477,31 +658,33 @@ void RenderPath3D::ResizeBuffers()
 
 		device->CreateRenderPass(&desc, &renderpass_reflection_depthprepass);
 	}
-	{
-		RenderPassDesc desc;
-		desc.attachments.push_back(
-			RenderPassAttachment::RenderTarget(
-				&rtReflection,
-				RenderPassAttachment::LOADOP_DONTCARE,
-				RenderPassAttachment::STOREOP_STORE,
-				IMAGE_LAYOUT_SHADER_RESOURCE,
-				IMAGE_LAYOUT_RENDERTARGET,
-				IMAGE_LAYOUT_SHADER_RESOURCE
-			)
-		);
-		desc.attachments.push_back(
-			RenderPassAttachment::DepthStencil(
-				&depthBuffer_Reflection, 
-				RenderPassAttachment::LOADOP_LOAD, 
-				RenderPassAttachment::STOREOP_DONTCARE,
-				IMAGE_LAYOUT_SHADER_RESOURCE,
-				IMAGE_LAYOUT_DEPTHSTENCIL_READONLY,
-				IMAGE_LAYOUT_DEPTHSTENCIL_READONLY
-			)
-		);
+	//PE: MOVED
+	//{
+	//	RenderPassDesc desc;
+	//	desc.attachments.push_back(
+	//		RenderPassAttachment::RenderTarget(
+	//			&rtReflection,
+	//			RenderPassAttachment::LOADOP_DONTCARE,
+	//			RenderPassAttachment::STOREOP_STORE,
+	//			IMAGE_LAYOUT_SHADER_RESOURCE,
+	//			IMAGE_LAYOUT_RENDERTARGET,
+	//			IMAGE_LAYOUT_SHADER_RESOURCE
+	//		)
+	//	);
+	//	desc.attachments.push_back(
+	//		RenderPassAttachment::DepthStencil(
+	//			&depthBuffer_Reflection, 
+	//			RenderPassAttachment::LOADOP_LOAD, 
+	//			RenderPassAttachment::STOREOP_DONTCARE,
+	//			IMAGE_LAYOUT_SHADER_RESOURCE,
+	//			IMAGE_LAYOUT_DEPTHSTENCIL_READONLY,
+	//			IMAGE_LAYOUT_DEPTHSTENCIL_READONLY
+	//		)
+	//	);
+	//
+	//	device->CreateRenderPass(&desc, &renderpass_reflection);
+	//}
 
-		device->CreateRenderPass(&desc, &renderpass_reflection);
-	}
 	{
 		RenderPassDesc desc;
 		desc.attachments.push_back(RenderPassAttachment::RenderTarget(&rtSceneCopy, RenderPassAttachment::LOADOP_DONTCARE));
@@ -529,12 +712,15 @@ void RenderPath3D::ResizeBuffers()
 
 		device->CreateRenderPass(&desc, &renderpass_lightshafts);
 	}
-	{
-		RenderPassDesc desc;
-		desc.attachments.push_back(RenderPassAttachment::RenderTarget(&rtVolumetricLights[0], RenderPassAttachment::LOADOP_CLEAR));
 
-		device->CreateRenderPass(&desc, &renderpass_volumetriclight);
-	}
+	//PE: MOVED
+	//{
+	//	RenderPassDesc desc;
+	//	desc.attachments.push_back(RenderPassAttachment::RenderTarget(&rtVolumetricLights[0], RenderPassAttachment::LOADOP_CLEAR));
+	//
+	//	device->CreateRenderPass(&desc, &renderpass_volumetriclight);
+	//}
+
 #ifndef REMOVE_WICKED_PARTICLE
 	{
 		RenderPassDesc desc;
@@ -568,6 +754,7 @@ void RenderPath3D::ResizeBuffers()
 	}
 #endif
 
+#ifndef REMOVE_DEBUGUAV
 	// Other resources:
 	{
 		TextureDesc desc;
@@ -585,16 +772,18 @@ void RenderPath3D::ResizeBuffers()
 		device->CreateTexture(&desc, nullptr, &debugUAV);
 		device->SetName(&debugUAV, "debugUAV");
 	}
+#endif
+
 	wiRenderer::CreateTiledLightResources(tiledLightResources, internalResolution);
 	wiRenderer::CreateTiledLightResources(tiledLightResources_planarReflection, internalResolution);
 	wiRenderer::CreateLuminanceResources(luminanceResources, internalResolution);
 	wiRenderer::CreateScreenSpaceShadowResources(screenspaceshadowResources, internalResolution);
-	wiRenderer::CreateDepthOfFieldResources(depthoffieldResources, internalResolution);
-	wiRenderer::CreateMotionBlurResources(motionblurResources, internalResolution);
+
 	wiRenderer::CreateVolumetricCloudResources(volumetriccloudResources[0], internalResolution);
 	wiRenderer::CreateVolumetricCloudResources(volumetriccloudResources[1], internalResolution);
 	wiRenderer::CreateVolumetricCloudResources(volumetriccloudResources_reflection[0], XMUINT2(depthBuffer_Reflection.desc.Width, depthBuffer_Reflection.desc.Height));
 	wiRenderer::CreateVolumetricCloudResources(volumetriccloudResources_reflection[1], XMUINT2(depthBuffer_Reflection.desc.Width, depthBuffer_Reflection.desc.Height));
+
 	wiRenderer::CreateBloomResources(bloomResources, internalResolution);
 
 #ifndef REMOVE_RAY_TRACED_SHADOW
@@ -608,6 +797,9 @@ void RenderPath3D::ResizeBuffers()
 	setSSREnabled(ssrEnabled);
 	setRaytracedReflectionsEnabled(raytracedReflectionsEnabled);
 	setFSREnabled(fsrEnabled);
+
+
+	CheckUsedTextures();
 
 	RenderPath2D::ResizeBuffers();
 }
@@ -665,6 +857,9 @@ void RenderPath3D::Update(float dt)
 	{
 		ResizeBuffers();
 	}
+
+	//PE: Only update textures depending of usage. to save VRAM.
+	CheckUsedTextures();
 
 	RenderPath2D::Update(dt);
 
@@ -927,7 +1122,7 @@ void RenderPath3D::Render(int mode) const
 		wiRenderer::Postprocess_DepthPyramid(depthBuffer_Copy, rtLinearDepth, cmd);
 
 		RenderAO(cmd);
-
+#ifndef GGREDUCED
 		if (wiRenderer::GetVariableRateShadingClassification() && device->CheckCapability(GRAPHICSDEVICE_CAPABILITY_VARIABLE_RATE_SHADING_TIER2))
 		{
 			wiRenderer::ComputeShadingRateClassification(
@@ -938,6 +1133,7 @@ void RenderPath3D::Render(int mode) const
 				cmd
 			);
 		}
+#endif
 
 		if (!g_bNoTerrainRender)
 		{
@@ -1049,7 +1245,9 @@ void RenderPath3D::Render(int mode) const
 		wiRenderer::RefreshDecalAtlas(*scene, cmd);
 		wiRenderer::RefreshLightmapAtlas(*scene, cmd);
 		wiRenderer::RefreshEnvProbes(visibility_main, cmd);
+#ifndef GGREDUCED
 		wiRenderer::RefreshImpostors(*scene, cmd);
+#endif
 		});
 
 	// Voxel GI:
@@ -1463,12 +1661,14 @@ void RenderPath3D::Compose(CommandList cmd) const
 	wiImage::Draw(GetLastPostprocessRT(), fx, cmd);
 	device->EventEnd(cmd);
 
+#ifndef REMOVE_DEBUGUAV
 	if (wiRenderer::GetDebugLightCulling() || wiRenderer::GetVariableRateShadingClassificationDebug())
 	{
 		fx.enableFullScreen();
 		fx.blendFlag = BLENDMODE_PREMULTIPLIED;
 		wiImage::Draw(&debugUAV, fx, cmd);
 	}
+#endif
 
 #ifdef GGREDUCED
 	XMUINT2 resolution;
@@ -1809,6 +2009,8 @@ void RenderPath3D::RenderTransparents(CommandList cmd, int mode) const
 		auto particlerange = wiProfiler::BeginRangeGPU("Particles - Init Render", cmd);
 		GPUParticles::gpup_draw_init(wiScene::GetCamera(), cmd);
 		wiProfiler::EndRange(particlerange);
+
+		wiRenderer::DrawSoftParticles_Init(visibility_main, rtLinearDepth, false, cmd);
 #endif
 
 		uint32_t drawscene_flags = 0;
@@ -1823,6 +2025,9 @@ void RenderPath3D::RenderTransparents(CommandList cmd, int mode) const
 		Tracers::tracer_draw(wiScene::GetCamera(), cmd);
 
 		GPUParticles::gpup_draw_bydistance(wiScene::GetCamera(), cmd, 0.0f);
+
+		wiRenderer::DrawSoftParticles_Distance(visibility_main, false, cmd,0.0f);
+
 		// repair constant buffers changed by particle shader
 		//BindCommonResources(cmd);
 		//BindConstantBuffers(VS, cmd);
@@ -1899,8 +2104,9 @@ void RenderPath3D::RenderTransparents(CommandList cmd, int mode) const
 	#endif
 
 	#ifndef REMOVE_WICKED_PARTICLE
-	wiRenderer::DrawSoftParticles(visibility_main, rtLinearDepth, false, cmd);
-	#endif
+	wiRenderer::DrawSoftParticles_Done(visibility_main, rtLinearDepth, false, cmd);
+	//wiRenderer::DrawSoftParticles(visibility_main, rtLinearDepth, false, cmd);
+#endif
 	#ifdef GGREDUCED
 	//PE: strange things happen when placed above, moved here, draw order looks fine.
 	//GPUParticles::gpup_draw(wiScene::GetCamera(), cmd); moved further up and incorporated into the DrawScene as particles need to be rendered back to front WITH other transparent objects (ie. window, window, particle, window)

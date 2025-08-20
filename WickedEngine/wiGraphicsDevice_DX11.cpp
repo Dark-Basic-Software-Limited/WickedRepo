@@ -2856,7 +2856,16 @@ CommandList GraphicsDevice_DX11::BeginCommandList(QUEUE_TYPE queue)
 
 	if (cmd >= COMMANDLIST_COUNT)
 	{
-		__debugbreak();
+		static uint32_t maxerrors = 5;
+		void timestampactivity(int i, char* desc_s);
+		if (maxerrors > 0)
+		{
+			maxerrors--;
+			char debug[MAX_PATH];
+			sprintf(debug, "DEBUG: cmd >= COMMANDLIST_COUNT (%d)" , cmd);
+			timestampactivity(0, debug);
+		}
+		//__debugbreak();
 	}
 	if (deviceContexts[cmd] == nullptr)
 	{
@@ -2991,12 +3000,21 @@ void GraphicsDevice_DX11::SubmitCommandLists()
 				{
 //#ifdef _DEBUG
 					//PE: For now lets get some info, should be in _DEBUG but.
-					char buff[64] = {};
-					sprintf_s(buff, "Device Lost: Reason code 0x%08X\n",
+					char buff[1024] = {};
+					sprintf_s(buff, "DEBUG: Device Lost: Reason code 0x%08X\n",
 						(hr == DXGI_ERROR_DEVICE_REMOVED) ? device->GetDeviceRemovedReason() : hr);
 					OutputDebugStringA(buff);
+					static uint32_t maxerrors = 5;
+					void timestampactivity(int i, char* desc_s);
+					if (maxerrors > 0)
+					{
+						maxerrors--;
+						timestampactivity(0, buff);
+					}
+					MessageBoxA(NULL, buff, "WickedError:", MB_OK);
+
 //#endif
-					__debugbreak();
+					//__debugbreak();
 				}
 		}
 	}
@@ -3252,7 +3270,16 @@ void GraphicsDevice_DX11::BindResource(SHADERSTAGE stage, const GPUResource* res
 #ifdef GGREDUCED
 			if (internal_state->srv == NULL)
 			{
-				__debugbreak();
+				static uint32_t maxerrors = 5;
+				void timestampactivity(int i, char* desc_s);
+				if (maxerrors > 0)
+				{
+					maxerrors--;
+					char debug[MAX_PATH];
+					sprintf(debug, "DEBUG: internal_state->srv == NULL");
+					timestampactivity(0, debug);
+				}
+				//__debugbreak();
 				return;
 			}
 #endif
@@ -3260,7 +3287,16 @@ void GraphicsDevice_DX11::BindResource(SHADERSTAGE stage, const GPUResource* res
 #ifdef GGREDUCED
 			if (SRV == NULL || SRV == (ID3D11ShaderResourceView*)0xdddddddddddddddd || SRV == (ID3D11ShaderResourceView*)1)
 			{
-				__debugbreak();
+				static uint32_t maxerrors = 5;
+				void timestampactivity(int i, char* desc_s);
+				if (maxerrors > 0)
+				{
+					maxerrors--;
+					char debug[MAX_PATH];
+					sprintf(debug, "DEBUG: SRV == NULL || SRV == (ID3D11ShaderResourceView*)0xdddddddddddddddd || SRV == (ID3D11ShaderResourceView*)1");
+					timestampactivity(0, debug);
+				}
+				//__debugbreak();
 				return;
 			}
 #endif

@@ -331,6 +331,7 @@ namespace wiPhysicsEngine
 		}
 	}
 
+#ifndef GGREDUCED //PE: Remove all physics checks, we dont use it.
 	void RunPhysicsUpdateSystem(
 		wiJobSystem::context& ctx,
 		Scene& scene,
@@ -649,6 +650,7 @@ namespace wiPhysicsEngine
 
 		wiProfiler::EndRange(range); // Physics
 	}
+#endif
 
 
 

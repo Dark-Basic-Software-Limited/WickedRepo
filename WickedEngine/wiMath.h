@@ -199,8 +199,65 @@ namespace wiMath
 	//
 	//	Modified for WickedEngine to return barycentrics
 	//-----------------------------------------------------------------------------
+
 	_Use_decl_annotations_
+	//PE: 18% faster.
 	inline bool XM_CALLCONV RayTriangleIntersects(FXMVECTOR Origin, FXMVECTOR Direction, FXMVECTOR V0, GXMVECTOR V1, HXMVECTOR V2, float& Dist, XMFLOAT2& bary)
+	{
+		const XMVECTOR g_RayEpsilon = XMVectorSet(1e-20f, 1e-20f, 1e-20f, 1e-20f);
+
+		XMVECTOR e1 = XMVectorSubtract(V1, V0);
+		XMVECTOR e2 = XMVectorSubtract(V2, V0);
+
+		XMVECTOR p = XMVector3Cross(Direction, e2);
+		XMVECTOR det = XMVector3Dot(e1, p);
+
+		XMVECTOR det_abs = XMVectorAbs(det);
+
+		if (XMVector3LessOrEqual(det_abs, g_RayEpsilon))
+		{
+			Dist = 0.f;
+			return false;
+		}
+
+		XMVECTOR inv_det = XMVectorReciprocal(det);
+
+		XMVECTOR s = XMVectorSubtract(Origin, V0);
+
+		XMVECTOR u = XMVector3Dot(s, p);
+		u = XMVectorMultiply(u, inv_det);
+
+		XMVECTOR q = XMVector3Cross(s, e1);
+
+		XMVECTOR v = XMVector3Dot(Direction, q);
+		v = XMVectorMultiply(v, inv_det);
+
+		// Check if barycentric coordinates are within the triangle
+		// u < 0 || v < 0 || u + v > 1
+		if (XMVector4Greater(XMVectorAdd(u, v), XMVectorSplatOne()) || XMVector4Less(u, XMVectorZero()) || XMVector4Less(v, XMVectorZero()))
+		{
+			Dist = 0.f;
+			return false;
+		}
+
+		XMVECTOR t = XMVector3Dot(e2, q);
+		t = XMVectorMultiply(t, inv_det);
+
+		if (XMVector4Less(t, XMVectorZero()))
+		{
+			Dist = 0.f;
+			return false;
+		}
+
+		// Store results
+		XMStoreFloat(&bary.x, u);
+		XMStoreFloat(&bary.y, v);
+		XMStoreFloat(&Dist, t);
+
+		return true;
+	}
+	_Use_decl_annotations_
+	inline bool XM_CALLCONV RayTriangleIntersects_OLD(FXMVECTOR Origin, FXMVECTOR Direction, FXMVECTOR V0, GXMVECTOR V1, HXMVECTOR V2, float& Dist, XMFLOAT2& bary)
 	{
 		const XMVECTOR g_RayEpsilon = XMVectorSet(1e-20f, 1e-20f, 1e-20f, 1e-20f);
 		const XMVECTOR g_RayNegEpsilon = XMVectorSet(-1e-20f, -1e-20f, -1e-20f, -1e-20f);

@@ -72,15 +72,15 @@ private:
 	bool fxaaEnabled = false;
 	bool ssrEnabled = false;
 	bool raytracedReflectionsEnabled = false;
-	bool reflectionsEnabled = true;
+	bool reflectionsEnabled = false;  //PE: was true use our defaults
 	bool shadowsEnabled = true;
 	bool bloomEnabled = true;
 	bool colorGradingEnabled = true;
-	bool volumeLightsEnabled = true;
+	bool volumeLightsEnabled = false; //PE: was true use our defaults
 	bool lightShaftsEnabled = false;
 	bool lensFlareEnabled = true;
 	bool motionBlurEnabled = false;
-	bool depthOfFieldEnabled = true;
+	bool depthOfFieldEnabled = false; //PE: was true use our defaults
 	bool eyeAdaptionEnabled = false;
 	bool sharpenFilterEnabled = false;
 	bool outlineEnabled = false;
@@ -209,7 +209,7 @@ public:
 #ifdef GGREDUCED
 	virtual void RenderOutlineHighlighers(wiGraphics::CommandList cmd) const;
 #endif
-
+	void CheckUsedTextures();
 	void ResizeBuffers() override;
 
 	wiScene::CameraComponent* camera = &wiScene::GetCamera();
