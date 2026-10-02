@@ -4071,7 +4071,13 @@ void UpdateVisibility(Visibility& vis, float maxApparentSize)
 
 			if ((aabb.layerMask & vis.layerMask))
 			{
+#ifdef GGREDUCED
+				// GG: a point or spot light with no range takes no entity slot
+				bool bInReach = lightcomponent.type == LightComponent::DIRECTIONAL || lightcomponent.GetRange() > 1.0f;
+				if (bInReach && vis.frustum.CheckBoxFast(aabb))
+#else
 				if (vis.frustum.CheckBoxFast(aabb))
+#endif
 				{
 					// Local stream compaction:
 					//	(also compute light distance for shadow priority sorting)
@@ -4127,7 +4133,12 @@ void UpdateVisibility(Visibility& vis, float maxApparentSize)
 #ifdef GGREDUCED
 					lightcomponent.bPrev_In_Frustom = true;
 #endif
+					#ifdef GGREDUCED
+					// GG: times 10 wrapped every 6,553 units, so far lights sorted as near ones
+					group_list[group_count].distance = uint16_t(std::min(distance * 0.25f, 65535.0f));
+					#else
 					group_list[group_count].distance = uint16_t(distance * 10);
+					#endif
 					group_count++;
 					if (lightcomponent.IsVolumetricsEnabled())
 					{
@@ -4681,6 +4692,21 @@ void UpdatePerFrameData(
 	frameCB.g_xFrame_ObjectShaderSamplerIndex = device->GetDescriptorIndex(&samplers[SSLOT_OBJECTSHADER]);
 
 	// The order is very important here:
+	#ifdef GGREDUCED
+	// GG: counts of what the entity array holds, so the shaders never read past it
+	const uint packedDecals = std::min((uint)vis.visibleDecals.size(), std::min(SHADER_ENTITY_COUNT, MATRIXARRAY_COUNT));
+	const uint packedProbes = std::min(std::min(vis.scene->envmapCount, (uint)vis.visibleEnvProbes.size()), std::min(SHADER_ENTITY_COUNT - packedDecals, MATRIXARRAY_COUNT - packedDecals));
+	const uint packedLights = std::min((uint)vis.visibleLights.size(), SHADER_ENTITY_COUNT - packedDecals - packedProbes);
+	const uint packedForces = std::min((uint)vis.scene->forces.GetCount(), SHADER_ENTITY_COUNT - packedDecals - packedProbes - packedLights);
+	frameCB.g_xFrame_DecalArrayOffset = 0;
+	frameCB.g_xFrame_DecalArrayCount = packedDecals;
+	frameCB.g_xFrame_EnvProbeArrayOffset = frameCB.g_xFrame_DecalArrayCount;
+	frameCB.g_xFrame_EnvProbeArrayCount = packedProbes;
+	frameCB.g_xFrame_LightArrayOffset = frameCB.g_xFrame_EnvProbeArrayOffset + frameCB.g_xFrame_EnvProbeArrayCount;
+	frameCB.g_xFrame_LightArrayCount = packedLights;
+	frameCB.g_xFrame_ForceFieldArrayOffset = frameCB.g_xFrame_LightArrayOffset + frameCB.g_xFrame_LightArrayCount;
+	frameCB.g_xFrame_ForceFieldArrayCount = packedForces;
+	#else
 	frameCB.g_xFrame_DecalArrayOffset = 0;
 	frameCB.g_xFrame_DecalArrayCount = (uint)vis.visibleDecals.size();
 	frameCB.g_xFrame_EnvProbeArrayOffset = frameCB.g_xFrame_DecalArrayCount;
@@ -4689,6 +4715,7 @@ void UpdatePerFrameData(
 	frameCB.g_xFrame_LightArrayCount = (uint)vis.visibleLights.size();
 	frameCB.g_xFrame_ForceFieldArrayOffset = frameCB.g_xFrame_LightArrayOffset + frameCB.g_xFrame_LightArrayCount;
 	frameCB.g_xFrame_ForceFieldArrayCount = (uint)vis.scene->forces.GetCount();
+	#endif
 
 	frameCB.g_xFrame_GlobalEnvProbeIndex = 0;
 	frameCB.g_xFrame_EnvProbeMipCount = 0;
@@ -4944,15 +4971,24 @@ void UpdateRenderData(
 		{
 			if (entityCounter == SHADER_ENTITY_COUNT)
 			{
+				#ifdef GGREDUCED
+				// GG: the rest are left out; taking one back overwrote the last slot
+				break;
+				#else
 				assert(0); // too many entities!
 				entityCounter--;
 				break;
+				#endif
 			}
 			if (matrixCounter >= MATRIXARRAY_COUNT)
 			{
+				#ifdef GGREDUCED
+				break; // GG: without overwriting the last matrix
+				#else
 				assert(0); // too many decals, can't upload the rest to matrixarray!
 				matrixCounter--;
 				break;
+				#endif
 			}
 			const uint32_t decalIndex = vis.visibleDecals[vis.visibleDecals.size() - 1 - i]; // note: reverse order, for correct blending!
 			const DecalComponent& decal = vis.scene->decals[decalIndex];
@@ -5014,15 +5050,24 @@ void UpdateRenderData(
 		{
 			if (entityCounter == SHADER_ENTITY_COUNT)
 			{
+				#ifdef GGREDUCED
+				// GG: the rest are left out; taking one back overwrote the last slot
+				break;
+				#else
 				assert(0); // too many entities!
 				entityCounter--;
 				break;
+				#endif
 			}
 			if (matrixCounter >= MATRIXARRAY_COUNT)
 			{
+				#ifdef GGREDUCED
+				break; // GG: without overwriting the last matrix
+				#else
 				assert(0); // too many probes, can't upload the rest to matrixarray!
 				matrixCounter--;
 				break;
+				#endif
 			}
 
 			const uint32_t probeIndex = vis.visibleEnvProbes[vis.visibleEnvProbes.size() - 1 - i]; // note: reverse order, for correct blending!
@@ -5068,9 +5113,14 @@ void UpdateRenderData(
 		{
 			if (entityCounter == SHADER_ENTITY_COUNT)
 			{
+				#ifdef GGREDUCED
+				// GG: the rest are left out; taking one back overwrote the last slot
+				break;
+				#else
 				assert(0); // too many entities!
 				entityCounter--;
 				break;
+				#endif
 			}
 
 			uint16_t lightIndex = visibleLight.index;
@@ -5339,9 +5389,14 @@ void UpdateRenderData(
 		{
 			if (entityCounter == SHADER_ENTITY_COUNT)
 			{
+				#ifdef GGREDUCED
+				// GG: the rest are left out; taking one back overwrote the last slot
+				break;
+				#else
 				assert(0); // too many entities!
 				entityCounter--;
 				break;
+				#endif
 			}
 
 			const ForceFieldComponent& force = vis.scene->forces[i];
