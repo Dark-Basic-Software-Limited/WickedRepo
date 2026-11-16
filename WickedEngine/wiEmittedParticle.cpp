@@ -138,7 +138,11 @@ void wiEmittedParticle::CreateSelfBuffers()
 		sizeof(wiGraphics::IndirectDispatchArgs) + 
 		sizeof(wiGraphics::IndirectDispatchArgs) + 
 		sizeof(wiGraphics::IndirectDrawArgsInstanced);
-	wiRenderer::GetDevice()->CreateBuffer(&bd, nullptr, &indirectBuffers);
+	// GG: args start at zero; a paused emitter is drawn from them before any update writes them
+	std::vector<uint8_t> indirect_zero(bd.ByteWidth, 0);
+	data.pSysMem = indirect_zero.data();
+	wiRenderer::GetDevice()->CreateBuffer(&bd, &data, &indirectBuffers);
+	data.pSysMem = nullptr;
 
 	// Constant buffer:
 	bd.Usage = USAGE_DEFAULT;

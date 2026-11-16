@@ -12761,7 +12761,11 @@ void CreateDepthOfFieldResources(DepthOfFieldResources& res, XMUINT2 resolution)
 
 	bufferdesc.ByteWidth = TILE_STATISTICS_CAPACITY * sizeof(uint);
 	bufferdesc.MiscFlags = RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS | RESOURCE_MISC_INDIRECT_ARGS;
-	device->CreateBuffer(&bufferdesc, nullptr, &res.buffer_tile_statistics);
+	// GG: counters start at zero; left over memory sized the first indirect dispatch and hung the GPU
+	std::vector<uint8_t> tile_statistics_zero(bufferdesc.ByteWidth, 0);
+	SubresourceData tile_statistics_data;
+	tile_statistics_data.pSysMem = tile_statistics_zero.data();
+	device->CreateBuffer(&bufferdesc, &tile_statistics_data, &res.buffer_tile_statistics);
 
 	bufferdesc.MiscFlags = RESOURCE_MISC_BUFFER_STRUCTURED;
 	bufferdesc.StructureByteStride = sizeof(uint);
@@ -13221,7 +13225,11 @@ void CreateMotionBlurResources(MotionBlurResources& res, XMUINT2 resolution)
 
 	bufferdesc.ByteWidth = TILE_STATISTICS_CAPACITY * sizeof(uint);
 	bufferdesc.MiscFlags = RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS | RESOURCE_MISC_INDIRECT_ARGS;
-	device->CreateBuffer(&bufferdesc, nullptr, &res.buffer_tile_statistics);
+	// GG: counters start at zero; left over memory sized the first indirect dispatch and hung the GPU
+	std::vector<uint8_t> tile_statistics_zero(bufferdesc.ByteWidth, 0);
+	SubresourceData tile_statistics_data;
+	tile_statistics_data.pSysMem = tile_statistics_zero.data();
+	device->CreateBuffer(&bufferdesc, &tile_statistics_data, &res.buffer_tile_statistics);
 
 	bufferdesc.MiscFlags = RESOURCE_MISC_BUFFER_STRUCTURED;
 	bufferdesc.StructureByteStride = sizeof(uint);
